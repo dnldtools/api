@@ -4,6 +4,7 @@ import (
 	"rest-api/internal/downloader"
 	"rest-api/internal/downloader/providers/facebook"
 	"rest-api/internal/downloader/providers/instagram"
+	"rest-api/internal/downloader/providers/shopee"
 	"rest-api/internal/downloader/providers/tiktok"
 )
 
@@ -12,6 +13,7 @@ func RegisterAll(registry *downloader.Registry) error {
 		facebook.New(),
 		instagram.New(),
 		tiktok.New(),
+		shopee.New(),
 	} {
 		if err := registry.Register(p); err != nil {
 			return err

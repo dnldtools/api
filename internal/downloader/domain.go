@@ -8,6 +8,7 @@ const (
 	PlatformFacebook  Platform = "facebook"
 	PlatformInstagram Platform = "instagram"
 	PlatformTikTok    Platform = "tiktok"
+	PlatformShopee    Platform = "shopee"
 )
 
 type MediaType string

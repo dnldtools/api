@@ -1,11 +1,12 @@
 # rest-api
 
 REST API untuk mengunduh media dari berbagai platform (saat ini Facebook,
-Instagram, dan TikTok; platform lain menyusul).
+Instagram, TikTok, dan Shopee; platform lain menyusul).
 
 > **Status:** Facebook sudah terimplementasi (via fget.io), Instagram
-> (official API relay + snapinsta fallback), dan TikTok (snaptik
-> fallback utama + official rehydration relay). Platform lain ditambahkan
+> (official API relay + snapinsta fallback), TikTok (snaptik
+> fallback utama + official rehydration relay), dan Shopee (official
+> watermark + shopeenowatermark lewat proxy). Platform lain ditambahkan
 > sesuai scraper yang dikirim kemudian.
 
 ---
@@ -65,7 +66,7 @@ rest-api/
 │   ├── ratelimit/           # Rate limiter jendela-pendek (Redis + in-memory)
 │   ├── quota/               # Kuota harian/bulanan (Postgres source of truth)
 │   ├── downloader/          # Domain + engine (types, Provider/Resolver interface, Registry, Service)
-│   │   └── providers/       # Adapter platform (facebook, instagram, tiktok)
+│   │   └── providers/       # Adapter platform (facebook, instagram, tiktok, shopee)
 │   ├── browser/             # Abstraksi browser automation + adapter Playwright
 │   ├── database/            # PostgreSQL: connection pool + migration runner
 │   ├── cache/               # Redis: client (counter best-effort)
@@ -123,7 +124,7 @@ curl -X POST http://localhost:8080/v1/downloads \
 | GET    | `/v1/keys`           | implemented | `X-API-Key` wajib   | Daftar API key                         |
 | POST   | `/v1/keys`           | implemented | `X-API-Key` wajib   | Buat API key baru                      |
 | POST   | `/v1/keys/{id}/revoke`| implemented| `X-API-Key` wajib   | Cabut API key                          |
-| POST   | `/v1/downloads`      | skeleton    | `X-API-Key` wajib   | Resolve/download media (Facebook via fget.io, Instagram official + snapinsta, TikTok snaptik + official) |
+| POST   | `/v1/downloads`      | skeleton    | `X-API-Key` wajib   | Resolve/download media (Facebook via fget.io, Instagram official + snapinsta, TikTok snaptik + official, Shopee official + shopeenowatermark) |
 
 Semua response (termasuk 404) selalu dalam format JSON.
 
