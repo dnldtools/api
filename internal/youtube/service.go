@@ -169,11 +169,13 @@ func (s *Service) Convert(ctx context.Context, req ConvertRequest) (*ConvertResu
 	if !ok {
 		return nil, ErrInvalidURL
 	}
-	output, requested, err := resolveFormat(req)
+	sel, err := resolveFormat(req)
 	if err != nil {
 		return nil, err
 	}
+	requested := sel.Format
 	watch := watchURL(id)
+	job := buildJob(watch, sel, req.Track)
 
 	pollCtx, cancel := context.WithTimeout(ctx, s.cfg.PollTimeout)
 	defer cancel()
@@ -188,7 +190,7 @@ func (s *Service) Convert(ctx context.Context, req ConvertRequest) (*ConvertResu
 
 	var lastErr error
 	for _, worker := range workers {
-		created, err := s.createJob(pollCtx, worker, watch, output)
+		created, err := s.createJob(pollCtx, worker, job)
 		if err != nil {
 			lastErr = err
 			continue
@@ -272,9 +274,9 @@ func (s *Service) waitForCompletion(ctx context.Context, created createJobRespon
 	}
 }
 
-func (s *Service) createJob(ctx context.Context, worker, videoURL string, output outputPayload) (createJobResponse, error) {
+func (s *Service) createJob(ctx context.Context, worker string, job createJobRequest) (createJobResponse, error) {
 	var out createJobResponse
-	body, err := json.Marshal(createJobRequest{URL: videoURL, Output: output})
+	body, err := json.Marshal(job)
 	if err != nil {
 		return out, err
 	}
@@ -398,8 +400,45 @@ type healthResponse struct {
 }
 
 type createJobRequest struct {
-	URL    string        `json:"url"`
-	Output outputPayload `json:"output"`
+	URL     string        `json:"url"`
+	OS      string        `json:"os"`
+	Output  outputPayload `json:"output"`
+	Audio   *audioPayload `json:"audio,omitempty"`
+	Premium bool          `json:"premium,omitempty"`
+}
+
+// buildJob assembles the v3 worker payload for a resolved format and an
+// optional alternate audio track. The payload always carries `url` and
+// `os: "windows"`. The `audio` fragment (bitrate + trackId) is only attached
+// to audio conversions: audio.bitrate only for MP3 and audio.trackId only when
+// a non-origin track was requested. Video jobs never carry `audio`.
+func buildJob(videoURL string, sel formatSelection, track string) createJobRequest {
+	job := createJobRequest{
+		URL:     videoURL,
+		OS:      "windows",
+		Output:  sel.Output,
+		Premium: sel.Premium,
+	}
+
+	if sel.Format.Type != "audio" {
+		return job
+	}
+
+	var audio *audioPayload
+	if sel.Audio != nil {
+		cp := *sel.Audio
+		audio = &cp
+	}
+	if id := normalizeTrack(track); id != "" {
+		if audio == nil {
+			audio = &audioPayload{}
+		}
+		audio.TrackID = id
+	}
+	if audio != nil {
+		job.Audio = audio
+	}
+	return job
 }
 
 type createJobResponse struct {

@@ -1,14 +1,16 @@
 package youtube
 
-// Format describes one output option in the conversion catalog. It maps
-// directly onto the `output` payload expected by the convert1s worker API.
+// Format describes one output option in the conversion catalog. The Bitrate
+// and Premium fields carry request-side metadata used to build the v3 worker
+// payload; they are only set for the formats that need them.
 type Format struct {
 	ID      string `json:"id"`                // catalog preset id, e.g. "mp3-320"
 	Type    string `json:"type"`              // "audio" or "video"
 	Format  string `json:"format"`            // container/extension, e.g. "mp3", "mp4"
-	Quality string `json:"quality"`           // "320kbps", "720p", "best", ...
+	Quality string `json:"quality,omitempty"` // "320kbps", "720p", ...
 	Label   string `json:"label"`             // human-readable label
-	Default bool   `json:"default,omitempty"` // true for the recommended option
+	Bitrate string `json:"bitrate,omitempty"` // audio MP3 bitrate, e.g. "320k"
+	Premium bool   `json:"premium,omitempty"` // true for premium video formats
 }
 
 // Catalog is the full list of supported conversion formats, grouped by type.
@@ -44,13 +46,16 @@ type SearchResult struct {
 
 // ConvertRequest is the JSON body accepted by POST /v1/youtube/convert. At
 // least `url` is required. The output format can be selected either via a
-// catalog `preset` id or via the `type`/`format`/`quality` fields.
+// catalog `preset` id or via the `type`/`format`/`quality`/`bitrate` fields.
+// `Track` selects an alternate audio track (the worker default is "origin").
 type ConvertRequest struct {
 	URL     string `json:"url"`
 	Preset  string `json:"preset,omitempty"`
 	Type    string `json:"type,omitempty"`
 	Format  string `json:"format,omitempty"`
 	Quality string `json:"quality,omitempty"`
+	Bitrate string `json:"bitrate,omitempty"`
+	Track   string `json:"track,omitempty"`
 }
 
 // FormatSpec describes a requested or actual output format. It carries only
@@ -92,5 +97,12 @@ type ConvertResult struct {
 type outputPayload struct {
 	Type    string `json:"type"`
 	Format  string `json:"format"`
-	Quality string `json:"quality"`
+	Quality string `json:"quality,omitempty"`
+}
+
+// audioPayload carries the v3 audio options for a conversion job. Bitrate is
+// only sent for MP3 output; TrackID is only sent for a non-origin track.
+type audioPayload struct {
+	Bitrate string `json:"bitrate,omitempty"`
+	TrackID string `json:"trackId,omitempty"`
 }

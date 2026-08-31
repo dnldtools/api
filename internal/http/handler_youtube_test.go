@@ -49,6 +49,29 @@ func youtubeUpstream(t *testing.T) http.Handler {
 // youtubeUpstreamAt emulates the upstream, serving an MP3 download encoded at
 // the given bitrate so quality-change behaviour can be exercised.
 func youtubeUpstreamAt(t *testing.T, mp3Bitrate int) http.Handler {
+	return newYouTubeUpstream(t, mp3Bitrate, nil)
+}
+
+// capturedDownload mirrors the fields of the v3 worker payload that tests
+// assert on.
+type capturedDownload struct {
+	URL    string `json:"url"`
+	OS     string `json:"os"`
+	Output struct {
+		Type    string `json:"type"`
+		Format  string `json:"format"`
+		Quality string `json:"quality"`
+	} `json:"output"`
+	Audio *struct {
+		Bitrate string `json:"bitrate"`
+		TrackID string `json:"trackId"`
+	} `json:"audio"`
+	Premium bool `json:"premium"`
+}
+
+// newYouTubeUpstream emulates the convert1s hub/meta/worker endpoints. When
+// capture is non-nil, the decoded /api/download request body is copied into it.
+func newYouTubeUpstream(t *testing.T, mp3Bitrate int, capture *capturedDownload) http.Handler {
 	t.Helper()
 	var serverURL string
 
@@ -89,17 +112,13 @@ func youtubeUpstreamAt(t *testing.T, mp3Bitrate int) http.Handler {
 
 	mux.HandleFunc("/api/download", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		var body struct {
-			URL    string `json:"url"`
-			Output struct {
-				Type    string `json:"type"`
-				Format  string `json:"format"`
-				Quality string `json:"quality"`
-			} `json:"output"`
-		}
+		var body capturedDownload
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
+		}
+		if capture != nil {
+			*capture = body
 		}
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"statusUrl":        serverURL + "/api/status/job-1",
@@ -332,6 +351,71 @@ func TestYouTubeConvertDownloadURLKeepsAmpersand(t *testing.T) {
 	}
 }
 
+func TestYouTubeConvertSendsV3Payload(t *testing.T) {
+	cases := []struct {
+		name        string
+		preset      string
+		wantType    string
+		wantFormat  string
+		wantQuality string // "" means output.quality must be omitted
+		wantBitrate string // "" means audio.bitrate must be absent
+		wantPremium bool
+	}{
+		{"mp3-320", "mp3-320", "audio", "mp3", "", "320k", false},
+		{"wav", "wav", "audio", "wav", "", "", false},
+		{"mp4-720", "mp4-720", "video", "mp4", "720p", "", false},
+		{"mp4-1080-premium", "mp4-1080-premium", "video", "mp4", "1080p", "", true},
+		{"mp4-2160", "mp4-2160", "video", "mp4", "2160p", "", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var cap capturedDownload
+			h := newYouTubeRouter(t, newYouTubeUpstream(t, 192, &cap))
+
+			rec := doYouTubeRequest(t, h, http.MethodPost, "/v1/youtube/convert",
+				`{"url":"https://www.youtube.com/watch?v=jNQXAC9IVRw","preset":"`+tc.preset+`"}`)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+			}
+
+			if cap.URL != "https://www.youtube.com/watch?v=jNQXAC9IVRw" {
+				t.Errorf("url = %q", cap.URL)
+			}
+			if cap.OS != "windows" {
+				t.Errorf("os = %q, want windows", cap.OS)
+			}
+			if cap.Output.Type != tc.wantType || cap.Output.Format != tc.wantFormat || cap.Output.Quality != tc.wantQuality {
+				t.Errorf("output = %+v, want {%s %s %q}", cap.Output, tc.wantType, tc.wantFormat, tc.wantQuality)
+			}
+			if cap.Premium != tc.wantPremium {
+				t.Errorf("premium = %v, want %v", cap.Premium, tc.wantPremium)
+			}
+			var gotBitrate string
+			if cap.Audio != nil {
+				gotBitrate = cap.Audio.Bitrate
+			}
+			if gotBitrate != tc.wantBitrate {
+				t.Errorf("audio.bitrate = %q, want %q", gotBitrate, tc.wantBitrate)
+			}
+		})
+	}
+}
+
+func TestYouTubeConvertSendsTrackID(t *testing.T) {
+	var cap capturedDownload
+	h := newYouTubeRouter(t, newYouTubeUpstream(t, 192, &cap))
+
+	rec := doYouTubeRequest(t, h, http.MethodPost, "/v1/youtube/convert",
+		`{"url":"https://www.youtube.com/watch?v=jNQXAC9IVRw","preset":"mp3-320","track":"en"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if cap.Audio == nil || cap.Audio.TrackID != "en" || cap.Audio.Bitrate != "320k" {
+		t.Errorf("audio = %+v, want bitrate 320k + trackId en", cap.Audio)
+	}
+}
+
 func TestYouTubeConvertValidation(t *testing.T) {
 	h := newYouTubeRouter(t, youtubeUpstream(t))
 
@@ -341,6 +425,7 @@ func TestYouTubeConvertValidation(t *testing.T) {
 		code string
 	}{
 		{"missing url", `{"preset":"mp3-320"}`, "INVALID_URL"},
+		{"no format", `{"url":"https://youtu.be/jNQXAC9IVRw"}`, "FORMAT_NOT_AVAILABLE"},
 		{"unknown preset", `{"url":"https://youtu.be/jNQXAC9IVRw","preset":"nope"}`, "FORMAT_NOT_AVAILABLE"},
 		{"invalid json", `{`, "INVALID_JSON"},
 		{"unknown field", `{"url":"https://youtu.be/jNQXAC9IVRw","extra":1}`, "INVALID_JSON"},

@@ -11,60 +11,71 @@ import (
 
 func TestResolveFormatByPreset(t *testing.T) {
 	tests := []struct {
-		preset  string
-		typ     string
-		format  string
-		quality string
+		preset       string
+		typ          string
+		format       string
+		quality      string
+		audioBitrate string
+		premium      bool
 	}{
-		{"mp3-320", "audio", "mp3", "320kbps"},
-		{"mp4-720", "video", "mp4", "720p"},
-		{"mp4-2160", "video", "mp4", "2160p"},
-		{"flac-best", "audio", "flac", "best"},
-		{"mkv-1080", "video", "mkv", "1080p"},
+		{"mp3-320", "audio", "mp3", "", "320k", false},
+		{"mp3-64", "audio", "mp3", "", "64k", false},
+		{"wav", "audio", "wav", "", "", false},
+		{"flac", "audio", "flac", "", "", false},
+		{"mp4-720", "video", "mp4", "720p", "", false},
+		{"mp4-2160", "video", "mp4", "2160p", "", true},
+		{"mp4-1080-premium", "video", "mp4", "1080p", "", true},
 	}
 
 	for _, tc := range tests {
-		output, f, err := resolveFormat(ConvertRequest{Preset: tc.preset})
+		sel, err := resolveFormat(ConvertRequest{Preset: tc.preset})
 		if err != nil {
 			t.Errorf("%s: resolveFormat error = %v", tc.preset, err)
 			continue
 		}
-		if output.Type != tc.typ || output.Format != tc.format || output.Quality != tc.quality {
-			t.Errorf("%s: output = %+v, want {%s %s %s}", tc.preset, output, tc.typ, tc.format, tc.quality)
+		if sel.Output.Type != tc.typ || sel.Output.Format != tc.format || sel.Output.Quality != tc.quality {
+			t.Errorf("%s: output = %+v, want {%s %s %s}", tc.preset, sel.Output, tc.typ, tc.format, tc.quality)
 		}
-		if f.ID != tc.preset {
-			t.Errorf("%s: descriptor id = %q, want %q", tc.preset, f.ID, tc.preset)
+		if sel.Format.ID != tc.preset {
+			t.Errorf("%s: descriptor id = %q, want %q", tc.preset, sel.Format.ID, tc.preset)
+		}
+		if got := audioBitrate(sel.Audio); got != tc.audioBitrate {
+			t.Errorf("%s: audio.bitrate = %q, want %q", tc.preset, got, tc.audioBitrate)
+		}
+		if sel.Premium != tc.premium {
+			t.Errorf("%s: premium = %v, want %v", tc.preset, sel.Premium, tc.premium)
 		}
 	}
+}
+
+func audioBitrate(a *audioPayload) string {
+	if a == nil {
+		return ""
+	}
+	return a.Bitrate
 }
 
 func TestResolveFormatUnknownPreset(t *testing.T) {
-	if _, _, err := resolveFormat(ConvertRequest{Preset: "nope"}); err != ErrFormatUnavailable {
+	if _, err := resolveFormat(ConvertRequest{Preset: "nope"}); err != ErrFormatUnavailable {
 		t.Errorf("unknown preset error = %v, want ErrFormatUnavailable", err)
 	}
-}
-
-func TestResolveFormatDefaults(t *testing.T) {
-	// No fields → audio mp3 320kbps.
-	output, f, err := resolveFormat(ConvertRequest{})
-	if err != nil {
-		t.Fatalf("resolveFormat default error = %v", err)
-	}
-	if output.Type != "audio" || output.Format != "mp3" || output.Quality != "320kbps" {
-		t.Errorf("default output = %+v, want audio/mp3/320kbps", output)
-	}
-	if f.ID != "mp3-320" {
-		t.Errorf("default descriptor id = %q, want mp3-320", f.ID)
+	// Old catalog ids are gone and must not resolve.
+	if _, err := resolveFormat(ConvertRequest{Preset: "mp3-256"}); err != ErrFormatUnavailable {
+		t.Errorf("removed preset error = %v, want ErrFormatUnavailable", err)
 	}
 }
 
-func TestResolveFormatInfersTypeFromFormat(t *testing.T) {
-	output, _, err := resolveFormat(ConvertRequest{Format: "mp4"})
-	if err != nil {
-		t.Fatalf("resolveFormat(mp4) error = %v", err)
+func TestResolveFormatRequiresSelection(t *testing.T) {
+	// No fields → error, never a silent 320kbps default.
+	if _, err := resolveFormat(ConvertRequest{}); err != ErrFormatUnavailable {
+		t.Errorf("empty request error = %v, want ErrFormatUnavailable", err)
 	}
-	if output.Type != "video" || output.Quality != "720p" {
-		t.Errorf("mp4 output = %+v, want video/mp4/720p", output)
+}
+
+func TestResolveFormatRequiresVideoQuality(t *testing.T) {
+	// type=video + format=mp4 without quality must not silently pick a preset.
+	if _, err := resolveFormat(ConvertRequest{Type: "video", Format: "mp4"}); err != ErrFormatUnavailable {
+		t.Errorf("video without quality error = %v, want ErrFormatUnavailable", err)
 	}
 }
 
@@ -75,11 +86,88 @@ func TestResolveFormatRejectsInvalidValues(t *testing.T) {
 		{Type: "audio", Format: "mp4"},
 		{Type: "video", Format: "mp4", Quality: "999p"},
 		{Format: "notarealformat"},
+		{Type: "audio", Format: "mp3"},                 // mp3 without bitrate
+		{Type: "audio", Format: "mp3", Bitrate: "999"}, // unknown bitrate
 	}
 	for _, req := range cases {
-		if _, _, err := resolveFormat(req); err != ErrFormatUnavailable {
+		if _, err := resolveFormat(req); err != ErrFormatUnavailable {
 			t.Errorf("resolveFormat(%+v) error = %v, want ErrFormatUnavailable", req, err)
 		}
+	}
+}
+
+func TestResolveFormatFromFields(t *testing.T) {
+	tests := []struct {
+		req     ConvertRequest
+		id      string
+		quality string
+		bitrate string
+		premium bool
+	}{
+		{ConvertRequest{Type: "audio", Format: "mp3", Bitrate: "128kbps"}, "mp3-128", "", "128k", false},
+		{ConvertRequest{Type: "audio", Format: "mp3", Bitrate: "320"}, "mp3-320", "", "320k", false},
+		{ConvertRequest{Type: "audio", Format: "wav"}, "wav", "", "", false},
+		{ConvertRequest{Type: "video", Format: "mp4", Quality: "720p"}, "mp4-720", "720p", "", false},
+		{ConvertRequest{Type: "video", Format: "mp4", Quality: "2160p"}, "mp4-2160", "2160p", "", true},
+		{ConvertRequest{Type: "video", Format: "mp4", Quality: "1440"}, "mp4-1440", "1440p", "", true},
+	}
+	for _, tc := range tests {
+		sel, err := resolveFormat(tc.req)
+		if err != nil {
+			t.Errorf("resolveFormat(%+v) error = %v", tc.req, err)
+			continue
+		}
+		if sel.Format.ID != tc.id {
+			t.Errorf("resolveFormat(%+v) id = %q, want %q", tc.req, sel.Format.ID, tc.id)
+		}
+		if sel.Output.Quality != tc.quality {
+			t.Errorf("resolveFormat(%+v) quality = %q, want %q", tc.req, sel.Output.Quality, tc.quality)
+		}
+		if got := audioBitrate(sel.Audio); got != tc.bitrate {
+			t.Errorf("resolveFormat(%+v) bitrate = %q, want %q", tc.req, got, tc.bitrate)
+		}
+		if sel.Premium != tc.premium {
+			t.Errorf("resolveFormat(%+v) premium = %v, want %v", tc.req, sel.Premium, tc.premium)
+		}
+	}
+}
+
+func TestBuildJobV3Payload(t *testing.T) {
+	sel, err := resolveFormat(ConvertRequest{Preset: "mp3-320"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := buildJob("https://www.youtube.com/watch?v=ID", sel, "")
+	if job.URL != "https://www.youtube.com/watch?v=ID" || job.OS != "windows" {
+		t.Errorf("job url/os = %q/%q", job.URL, job.OS)
+	}
+	if job.Output.Type != "audio" || job.Output.Format != "mp3" || job.Output.Quality != "" {
+		t.Errorf("job output = %+v", job.Output)
+	}
+	if job.Audio == nil || job.Audio.Bitrate != "320k" {
+		t.Errorf("job audio = %+v, want bitrate 320k", job.Audio)
+	}
+	if job.Premium {
+		t.Error("mp3 job must not set premium")
+	}
+
+	// Alternate track merges into the same audio object.
+	job2 := buildJob("https://www.youtube.com/watch?v=ID", sel, "en")
+	if job2.Audio == nil || job2.Audio.TrackID != "en" || job2.Audio.Bitrate != "320k" {
+		t.Errorf("track job audio = %+v, want bitrate 320k + trackId en", job2.Audio)
+	}
+
+	// Video jobs never carry an audio fragment, even when a track is requested.
+	videoSel, err := resolveFormat(ConvertRequest{Preset: "mp4-720"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	videoJob := buildJob("https://www.youtube.com/watch?v=ID", videoSel, "en")
+	if videoJob.Audio != nil {
+		t.Errorf("video job must not carry audio fragment, got %+v", videoJob.Audio)
+	}
+	if videoJob.Output.Quality != "720p" || videoJob.Output.Type != "video" || videoJob.Output.Format != "mp4" {
+		t.Errorf("video job output = %+v", videoJob.Output)
 	}
 }
 
@@ -169,7 +257,7 @@ func TestWorkerList(t *testing.T) {
 	}
 }
 
-func TestFormatsCatalogHasDefaults(t *testing.T) {
+func TestFormatsCatalog(t *testing.T) {
 	c := Formats()
 	if len(c.Audio) == 0 || len(c.Video) == 0 {
 		t.Fatal("catalog is empty")
@@ -178,17 +266,24 @@ func TestFormatsCatalogHasDefaults(t *testing.T) {
 		t.Error("quality fallback should be enabled")
 	}
 
-	hasDefault := func(list []Format) bool {
-		for _, f := range list {
-			if f.Default {
-				return true
+	wantAudio := []string{"mp3-320", "mp3-192", "mp3-128", "mp3-64", "wav", "m4a", "ogg", "opus", "flac", "aac", "alac"}
+	wantVideo := []string{"mp4-2160", "mp4-1440", "mp4-1080-premium", "mp4-1080", "mp4-720", "mp4-480", "mp4-360", "mp4-144"}
+
+	assertIDs := func(got []Format, want []string, name string) {
+		if len(got) != len(want) {
+			t.Errorf("%s catalog has %d entries, want %d", name, len(got), len(want))
+		}
+		for i, id := range want {
+			if i >= len(got) {
+				break
+			}
+			if got[i].ID != id {
+				t.Errorf("%s[%d].id = %q, want %q", name, i, got[i].ID, id)
 			}
 		}
-		return false
 	}
-	if !hasDefault(c.Audio) || !hasDefault(c.Video) {
-		t.Error("catalog must mark a default audio and video format")
-	}
+	assertIDs(c.Audio, wantAudio, "audio")
+	assertIDs(c.Video, wantVideo, "video")
 }
 
 // mp3FrameBytes builds a valid MPEG-1 Layer III frame header for the given
