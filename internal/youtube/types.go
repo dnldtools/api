@@ -53,16 +53,38 @@ type ConvertRequest struct {
 	Quality string `json:"quality,omitempty"`
 }
 
+// FormatSpec describes a requested or actual output format. It carries only
+// the identity fields, so it can describe both catalog presets and probe-based
+// actual results without leaking catalog-only metadata (label/default).
+type FormatSpec struct {
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Format  string `json:"format"`
+	Quality string `json:"quality"`
+}
+
+// OutputSpec describes the actually produced file. Its quality is derived from
+// probing the download (or the worker's reported selection), never from the
+// requested preset alone.
+type OutputSpec struct {
+	ID          string `json:"id"`
+	Type        string `json:"type"`
+	Format      string `json:"format"`
+	Quality     string `json:"quality"`
+	BitrateKbps int    `json:"bitrate_kbps"`
+}
+
 // ConvertResult is the response payload of a successful conversion.
 type ConvertResult struct {
-	URL              string `json:"url"`
-	Title            string `json:"title,omitempty"`
-	Duration         int64  `json:"duration,omitempty"` // seconds
-	Output           Format `json:"output"`
-	RequestedQuality string `json:"requested_quality,omitempty"`
-	SelectedQuality  string `json:"selected_quality,omitempty"`
-	QualityChanged   bool   `json:"quality_changed,omitempty"`
-	DownloadURL      string `json:"download_url"`
+	URL            string     `json:"url"`
+	Title          string     `json:"title,omitempty"`
+	Duration       int64      `json:"duration,omitempty"` // seconds
+	Requested      FormatSpec `json:"requested"`
+	Output         OutputSpec `json:"output"`
+	QualityChanged bool       `json:"quality_changed"`
+	QualityNote    string     `json:"quality_note,omitempty"`
+	DownloadURL    string     `json:"download_url"`
+	Cover          string     `json:"cover"`
 }
 
 // outputPayload is the `output` object sent to the upstream worker API. It is

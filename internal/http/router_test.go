@@ -26,6 +26,7 @@ func newTestRouter(t *testing.T) http.Handler {
 		Youtube:     youtube.New(),
 		Auth:        &fakeAuthenticator{},
 		Keys:        &fakeKeyManager{},
+		Admin:       &fakeAdminManager{},
 		RateLimiter: ratelimit.NewMemoryLimiter(),
 		Quota:       &fakeQuota{},
 	})
@@ -87,6 +88,29 @@ func TestRouterUsesVersionedRoutesWithoutAPIPrefix(t *testing.T) {
 		router.ServeHTTP(rec, req)
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("GET %s status = %d, want %d", path, rec.Code, http.StatusNotFound)
+		}
+	}
+}
+
+func TestRouterServesFavicon(t *testing.T) {
+	router := newTestRouter(t)
+
+	for _, path := range []string{"/favicon.ico", "/favicon.png"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want %d", path, rec.Code, http.StatusOK)
+		}
+		if ct := rec.Header().Get("Content-Type"); ct != "image/png" {
+			t.Errorf("GET %s Content-Type = %q, want image/png", path, ct)
+		}
+		if len(rec.Body.Bytes()) == 0 {
+			t.Errorf("GET %s returned an empty body", path)
+		}
+		if !strings.HasPrefix(string(rec.Body.Bytes()), "\x89PNG") {
+			t.Errorf("GET %s body is not a PNG", path)
 		}
 	}
 }

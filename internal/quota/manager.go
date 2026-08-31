@@ -70,6 +70,11 @@ func (m *Manager) Usage(ctx context.Context, accountID int64, plan plans.Plan) (
 	}, nil
 }
 
+func (m *Manager) TotalUsage(ctx context.Context) (Usage, error) {
+	dailyStart, monthlyStart := PeriodStarts(m.now())
+	return m.repo.TotalUsage(ctx, dailyStart, monthlyStart)
+}
+
 func (m *Manager) Record(ctx context.Context, accountID int64, plan plans.Plan, statusCode int) {
 	success := metrics.IsSuccess(statusCode)
 	dailyStart, monthlyStart := PeriodStarts(m.now())

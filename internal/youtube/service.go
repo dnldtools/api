@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -168,7 +169,7 @@ func (s *Service) Convert(ctx context.Context, req ConvertRequest) (*ConvertResu
 	if !ok {
 		return nil, ErrInvalidURL
 	}
-	output, format, err := resolveFormat(req)
+	output, requested, err := resolveFormat(req)
 	if err != nil {
 		return nil, err
 	}
@@ -193,12 +194,20 @@ func (s *Service) Convert(ctx context.Context, req ConvertRequest) (*ConvertResu
 			continue
 		}
 
-		result, err := s.waitForCompletion(pollCtx, created)
+		job, err := s.waitForCompletion(pollCtx, created)
 		if err != nil {
 			return nil, err
 		}
-		result.URL = watch
-		result.Output = format
+
+		result := &ConvertResult{
+			URL:         watch,
+			Title:       job.Title,
+			Duration:    job.Duration,
+			Requested:   formatSpecFrom(requested),
+			DownloadURL: sanitizeDownloadURL(job.DownloadURL),
+			Cover:       coverURL(id),
+		}
+		s.applyQuality(ctx, result, requested, job)
 		return result, nil
 	}
 
@@ -213,38 +222,51 @@ func (s *Service) fetchWorkers(ctx context.Context) ([]string, error) {
 	return workerList(h), nil
 }
 
+// completedJob carries the raw fields reported by the convert1s worker for a
+// finished job, before any probe-based quality resolution.
+type completedJob struct {
+	Title            string
+	Duration         int64
+	DownloadURL      string
+	RequestedQuality string
+	SelectedQuality  string
+	QualityChanged   bool
+	NeedsReencode    bool
+}
+
 // waitForCompletion polls a created job until the upstream marks it completed.
-func (s *Service) waitForCompletion(ctx context.Context, created createJobResponse) (*ConvertResult, error) {
+func (s *Service) waitForCompletion(ctx context.Context, created createJobResponse) (completedJob, error) {
 	ticker := time.NewTicker(s.cfg.PollInterval)
 	defer ticker.Stop()
 
 	for {
 		polled, err := s.pollStatus(ctx, created.StatusURL)
 		if err != nil {
-			return nil, err
+			return completedJob{}, err
 		}
 
 		switch polled.Status {
 		case "completed":
-			result := &ConvertResult{
+			job := completedJob{
 				Title:            firstNonEmpty(polled.Title, created.Title),
 				Duration:         firstNonZero(polled.Duration, created.Duration),
 				DownloadURL:      polled.DownloadURL,
 				RequestedQuality: created.RequestedQuality,
 				SelectedQuality:  firstNonEmpty(polled.SelectedQuality, created.SelectedQuality),
-				QualityChanged:   created.QualityChanged,
+				QualityChanged:   created.QualityChanged || polled.QualityChanged,
+				NeedsReencode:    created.NeedsReencode || polled.NeedsReencode,
 			}
-			if result.DownloadURL == "" {
-				return nil, ErrProviderInvalidResponse
+			if job.DownloadURL == "" {
+				return completedJob{}, ErrProviderInvalidResponse
 			}
-			return result, nil
+			return job, nil
 		case "failed", "error":
-			return nil, ErrMediaNotFound
+			return completedJob{}, ErrMediaNotFound
 		}
 
 		select {
 		case <-ctx.Done():
-			return nil, ErrProviderTimeout
+			return completedJob{}, ErrProviderTimeout
 		case <-ticker.C:
 		}
 	}
@@ -402,6 +424,8 @@ type pollResponse struct {
 	Duration        int64  `json:"duration"`
 	DownloadURL     string `json:"downloadUrl"`
 	SelectedQuality string `json:"selectedQuality"`
+	QualityChanged  bool   `json:"qualityChanged"`
+	NeedsReencode   bool   `json:"needsReencode"`
 	Error           *struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
@@ -475,6 +499,11 @@ func videoID(raw string) (string, bool) {
 // watchURL builds the canonical watch URL for a video id.
 func watchURL(id string) string {
 	return "https://www.youtube.com/watch?v=" + id
+}
+
+// coverURL builds the i.ytimg.com thumbnail (cover) URL for a video id.
+func coverURL(id string) string {
+	return "https://i.ytimg.com/vi/" + id + "/hqdefault.jpg?source=api.dnld.app"
 }
 
 // relay rewrites worker status URLs on *.shop / *.site hosts through the hub
@@ -558,4 +587,80 @@ func firstNonZero(values ...int64) int64 {
 		}
 	}
 	return 0
+}
+
+// formatSpecFrom converts a catalog Format into the compact identity spec used
+// in the convert response.
+func formatSpecFrom(f Format) FormatSpec {
+	return FormatSpec{ID: f.ID, Type: f.Type, Format: f.Format, Quality: f.Quality}
+}
+
+// applyQuality resolves the actually produced output quality from the probed
+// download file, falling back to the worker's reported selection when probing
+// is unavailable. It never reports the requested preset as the actual output.
+func (s *Service) applyQuality(ctx context.Context, res *ConvertResult, requested Format, job completedJob) {
+	probe := s.probe(ctx, res.DownloadURL, requested.Format)
+
+	actualQuality := requested.Quality
+	actualBitrate := probe.BitrateKbps
+
+	switch {
+	case requested.Type == "audio" && probe.BitrateKbps > 0:
+		actualQuality = kbpsString(probe.BitrateKbps)
+	case job.SelectedQuality != "":
+		actualQuality = job.SelectedQuality
+		if requested.Type == "audio" {
+			if b, ok := parseKbps(job.SelectedQuality); ok {
+				actualBitrate = b
+			}
+		}
+	}
+
+	desc := describe(requested.Type, requested.Format, actualQuality)
+	res.Output = OutputSpec{
+		ID:          desc.ID,
+		Type:        desc.Type,
+		Format:      desc.Format,
+		Quality:     desc.Quality,
+		BitrateKbps: actualBitrate,
+	}
+
+	res.QualityChanged = actualQuality != requested.Quality || job.QualityChanged
+	if res.QualityChanged {
+		res.QualityNote = qualityNote(requested.Quality, actualQuality)
+	}
+}
+
+// qualityNote produces the human-readable note shown when the actual output
+// quality differs from the requested one.
+func qualityNote(requested, actual string) string {
+	if actual == "" || actual == requested {
+		return ""
+	}
+	return "Converted, quality adjusted to " + actual
+}
+
+func kbpsString(bitrate int) string {
+	return strconv.Itoa(bitrate) + "kbps"
+}
+
+func parseKbps(s string) (int, bool) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.TrimSuffix(s, "kbps")
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+// sanitizeDownloadURL normalises any literal \u0026 escape that survived JSON
+// decoding (e.g. double-encoded upstream URLs) into a real ampersand so the
+// returned URL is immediately usable.
+func sanitizeDownloadURL(u string) string {
+	return strings.ReplaceAll(u, `\u0026`, "&")
 }

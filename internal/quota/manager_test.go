@@ -37,6 +37,13 @@ func (f *fakeRepo) Usage(context.Context, int64, time.Time, time.Time) (Usage, e
 	return f.usage, nil
 }
 
+func (f *fakeRepo) TotalUsage(context.Context, time.Time, time.Time) (Usage, error) {
+	if f.err != nil {
+		return Usage{}, f.err
+	}
+	return f.usage, nil
+}
+
 type fakeCounter struct {
 	calls int
 }

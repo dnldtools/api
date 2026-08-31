@@ -12,14 +12,19 @@ import (
 )
 
 var contractRoutes = map[string][]string{
-	"/v1/downloads":        {"post"},
-	"/v1/youtube/search":   {"get"},
-	"/v1/youtube/formats":  {"get"},
-	"/v1/youtube/convert":  {"post"},
-	"/v1/account":          {"get"},
-	"/v1/usage":            {"get"},
-	"/v1/keys":             {"get", "post"},
-	"/v1/keys/{id}/revoke": {"post"},
+	"/v1/downloads":           {"post"},
+	"/v1/youtube/search":      {"get"},
+	"/v1/youtube/formats":     {"get"},
+	"/v1/youtube/convert":     {"post"},
+	"/v1/account":             {"get"},
+	"/v1/usage":               {"get"},
+	"/v1/keys":                {"get", "post"},
+	"/v1/keys/{id}/revoke":    {"post"},
+	"/v1/admin/accounts":      {"get"},
+	"/v1/admin/accounts/{id}": {"get", "patch", "delete"},
+	"/v1/admin/keys":          {"get", "post"},
+	"/v1/admin/keys/{id}":     {"get", "patch", "delete"},
+	"/v1/admin/stats":         {"get"},
 }
 
 type openAPIDocument struct {
@@ -108,14 +113,19 @@ func TestOpenAPINoAPIPrefix(t *testing.T) {
 func TestOpenAPIEndpointStatusAnnotations(t *testing.T) {
 	doc := loadOpenAPIDoc(t)
 	want := map[string]map[string]string{
-		"/v1/downloads":        {"post": "skeleton"},
-		"/v1/youtube/search":   {"get": "implemented"},
-		"/v1/youtube/formats":  {"get": "implemented"},
-		"/v1/youtube/convert":  {"post": "implemented"},
-		"/v1/account":          {"get": "implemented"},
-		"/v1/usage":            {"get": "implemented"},
-		"/v1/keys":             {"get": "implemented", "post": "implemented"},
-		"/v1/keys/{id}/revoke": {"post": "implemented"},
+		"/v1/downloads":           {"post": "skeleton"},
+		"/v1/youtube/search":      {"get": "implemented"},
+		"/v1/youtube/formats":     {"get": "implemented"},
+		"/v1/youtube/convert":     {"post": "implemented"},
+		"/v1/account":             {"get": "implemented"},
+		"/v1/usage":               {"get": "implemented"},
+		"/v1/keys":                {"get": "implemented", "post": "implemented"},
+		"/v1/keys/{id}/revoke":    {"post": "implemented"},
+		"/v1/admin/accounts":      {"get": "implemented"},
+		"/v1/admin/accounts/{id}": {"get": "implemented", "patch": "implemented", "delete": "implemented"},
+		"/v1/admin/keys":          {"get": "implemented", "post": "implemented"},
+		"/v1/admin/keys/{id}":     {"get": "implemented", "patch": "implemented", "delete": "implemented"},
+		"/v1/admin/stats":         {"get": "implemented"},
 	}
 	for path, methods := range contractRoutes {
 		for _, method := range methods {
@@ -145,14 +155,19 @@ func TestOpenAPIProtectedEndpointsRequireAPIKey(t *testing.T) {
 	doc := loadOpenAPIDoc(t)
 
 	protected := map[string][]string{
-		"/v1/downloads":        {"post"},
-		"/v1/youtube/search":   {"get"},
-		"/v1/youtube/formats":  {"get"},
-		"/v1/youtube/convert":  {"post"},
-		"/v1/account":          {"get"},
-		"/v1/usage":            {"get"},
-		"/v1/keys":             {"get", "post"},
-		"/v1/keys/{id}/revoke": {"post"},
+		"/v1/downloads":           {"post"},
+		"/v1/youtube/search":      {"get"},
+		"/v1/youtube/formats":     {"get"},
+		"/v1/youtube/convert":     {"post"},
+		"/v1/account":             {"get"},
+		"/v1/usage":               {"get"},
+		"/v1/keys":                {"get", "post"},
+		"/v1/keys/{id}/revoke":    {"post"},
+		"/v1/admin/accounts":      {"get"},
+		"/v1/admin/accounts/{id}": {"get", "patch", "delete"},
+		"/v1/admin/keys":          {"get", "post"},
+		"/v1/admin/keys/{id}":     {"get", "patch", "delete"},
+		"/v1/admin/stats":         {"get"},
 	}
 	for path, methods := range protected {
 		for _, method := range methods {

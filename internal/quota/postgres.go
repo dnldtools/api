@@ -68,3 +68,26 @@ func (r *PostgresRepository) Usage(ctx context.Context, accountID int64, dailySt
 	}
 	return u, nil
 }
+
+func (r *PostgresRepository) TotalUsage(ctx context.Context, dailyStart, monthlyStart time.Time) (Usage, error) {
+	var u Usage
+	err := r.pool.QueryRow(ctx, `
+		SELECT
+			COALESCE(SUM(total_requests) FILTER (WHERE period_type = 'daily'),   0),
+			COALESCE(SUM(success_count)  FILTER (WHERE period_type = 'daily'),   0),
+			COALESCE(SUM(failed_count)   FILTER (WHERE period_type = 'daily'),   0),
+			COALESCE(SUM(total_requests) FILTER (WHERE period_type = 'monthly'), 0),
+			COALESCE(SUM(success_count)  FILTER (WHERE period_type = 'monthly'), 0),
+			COALESCE(SUM(failed_count)   FILTER (WHERE period_type = 'monthly'), 0)
+		FROM quota_usage
+		WHERE period_start IN ($1, $2)`,
+		dailyStart, monthlyStart,
+	).Scan(
+		&u.DailyTotal, &u.DailySuccess, &u.DailyFailed,
+		&u.MonthlyTotal, &u.MonthlySuccess, &u.MonthlyFailed,
+	)
+	if err != nil {
+		return Usage{}, fmt.Errorf("quota: read total usage: %w", err)
+	}
+	return u, nil
+}

@@ -75,6 +75,36 @@ func (f *fakeRepo) RevokeKey(_ context.Context, accountID, keyID int64) error {
 	return nil
 }
 
+func (f *fakeRepo) ListAccounts(context.Context) ([]AccountSummary, error) { return nil, nil }
+
+func (f *fakeRepo) FindAccountSummary(context.Context, int64) (*AccountSummary, error) {
+	return nil, ErrAccountNotFound
+}
+
+func (f *fakeRepo) UpdateAccount(context.Context, int64, AccountChanges) (*Account, error) {
+	return nil, ErrAccountNotFound
+}
+
+func (f *fakeRepo) DisableAccount(context.Context, int64) error { return ErrAccountNotFound }
+
+func (f *fakeRepo) ListAllKeys(context.Context) ([]APIKeySummary, error) { return nil, nil }
+
+func (f *fakeRepo) FindKeyByID(context.Context, int64) (*APIKeySummary, error) {
+	return nil, ErrKeyNotFound
+}
+
+func (f *fakeRepo) UpdateKey(context.Context, int64, KeyChanges) (*APIKeySummary, error) {
+	return nil, ErrKeyNotFound
+}
+
+func (f *fakeRepo) RevokeKeyByID(context.Context, int64) error { return ErrKeyNotFound }
+
+func (f *fakeRepo) CountAccounts(context.Context) (int64, error) { return 0, nil }
+
+func (f *fakeRepo) CountKeysByStatus(context.Context) (map[KeyStatus]int64, error) {
+	return nil, nil
+}
+
 func activeAccount() *Account {
 	return &Account{
 		ID:     42,

@@ -226,6 +226,23 @@ func authMiddleware(authSvc auth.Authenticator, errHandler *ErrorHandler) Middle
 	}
 }
 
+func requireAdminMiddleware(errHandler *ErrorHandler) Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			identity, ok := identityFromContext(r.Context())
+			if !ok {
+				errHandler.Handle(w, r, apperrors.Internal(apperrors.CodeInternalError, "identity is missing"))
+				return
+			}
+			if identity.Role != auth.RoleAdmin {
+				errHandler.Handle(w, r, apperrors.Authorization(apperrors.CodeForbidden, "admin access required"))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func rateLimitMiddleware(limiter ratelimit.Limiter, policies plans.PolicySet, errHandler *ErrorHandler) Middleware {
 	if policies == nil {
 		policies = plans.Defaults()

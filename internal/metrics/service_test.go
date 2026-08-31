@@ -23,6 +23,14 @@ func (f *fakeRepository) Aggregate(context.Context, time.Time, time.Time) (Stats
 	return Stats{}, nil
 }
 
+func (f *fakeRepository) EndpointBreakdown(context.Context, time.Time, time.Time) ([]EndpointStat, error) {
+	return nil, nil
+}
+
+func (f *fakeRepository) PlatformBreakdown(context.Context, time.Time, time.Time) ([]PlatformStat, error) {
+	return nil, nil
+}
+
 func (f *fakeRepository) snapshot() []Event {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -139,4 +147,12 @@ type fixedStatsRepo struct {
 func (f *fixedStatsRepo) Insert(context.Context, Event) error { return nil }
 func (f *fixedStatsRepo) Aggregate(context.Context, time.Time, time.Time) (Stats, error) {
 	return f.stats, nil
+}
+
+func (f *fixedStatsRepo) EndpointBreakdown(context.Context, time.Time, time.Time) ([]EndpointStat, error) {
+	return nil, nil
+}
+
+func (f *fixedStatsRepo) PlatformBreakdown(context.Context, time.Time, time.Time) ([]PlatformStat, error) {
+	return nil, nil
 }

@@ -136,12 +136,14 @@ func New(cfg *config.Config, logger *slog.Logger) (*Application, error) {
 
 	var authSvc auth.Authenticator
 	var keySvc auth.KeyManager
+	var adminSvc auth.AdminManager
 	var quotaSvc quota.Service
 	if a.db != nil {
 		authRepo := auth.NewPostgresRepository(a.db.Pool())
 		svc := auth.NewService(authRepo, nil)
 		authSvc = svc
 		keySvc = svc
+		adminSvc = svc
 
 		quotaRepo := quota.NewPostgresRepository(a.db.Pool())
 		var quotaCounter quota.Counter
@@ -167,6 +169,7 @@ func New(cfg *config.Config, logger *slog.Logger) (*Application, error) {
 		Metrics:      a.metrics,
 		Auth:         authSvc,
 		Keys:         keySvc,
+		Admin:        adminSvc,
 		RateLimiter:  rateLimiter,
 		Quota:        quotaSvc,
 		Plans:        policies,

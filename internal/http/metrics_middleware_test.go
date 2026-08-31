@@ -29,6 +29,14 @@ func (f *fakeMetricsRepo) Aggregate(context.Context, time.Time, time.Time) (metr
 	return metrics.Stats{}, nil
 }
 
+func (f *fakeMetricsRepo) EndpointBreakdown(context.Context, time.Time, time.Time) ([]metrics.EndpointStat, error) {
+	return nil, nil
+}
+
+func (f *fakeMetricsRepo) PlatformBreakdown(context.Context, time.Time, time.Time) ([]metrics.PlatformStat, error) {
+	return nil, nil
+}
+
 func (f *fakeMetricsRepo) snapshot() []metrics.Event {
 	f.mu.Lock()
 	defer f.mu.Unlock()

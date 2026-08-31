@@ -128,6 +128,16 @@ curl "http://localhost:8080/v1/youtube/search?q=lofi" \
 | GET    | `/v1/keys`            | implemented | `X-API-Key` wajib   | Daftar API key                         |
 | POST   | `/v1/keys`            | implemented | `X-API-Key` wajib   | Buat API key baru                      |
 | POST   | `/v1/keys/{id}/revoke`| implemented | `X-API-Key` wajib   | Cabut API key                          |
+| GET    | `/v1/admin/accounts`  | implemented | `X-API-Key` + role `admin` | Daftar semua akun              |
+| GET    | `/v1/admin/accounts/{id}` | implemented | `X-API-Key` + role `admin` | Detail akun               |
+| PATCH  | `/v1/admin/accounts/{id}` | implemented | `X-API-Key` + role `admin` | Ubah akun (soft)         |
+| DELETE | `/v1/admin/accounts/{id}` | implemented | `X-API-Key` + role `admin` | Nonaktifkan akun (soft-delete) |
+| GET    | `/v1/admin/keys`      | implemented | `X-API-Key` + role `admin` | Daftar semua key lintas akun |
+| GET    | `/v1/admin/keys/{id}` | implemented | `X-API-Key` + role `admin` | Detail key               |
+| POST   | `/v1/admin/keys`      | implemented | `X-API-Key` + role `admin` | Buat key untuk akun lain (raw key sekali) |
+| PATCH  | `/v1/admin/keys/{id}` | implemented | `X-API-Key` + role `admin` | Ubah key (name/status)  |
+| DELETE | `/v1/admin/keys/{id}` | implemented | `X-API-Key` + role `admin` | Cabut key (revoke)      |
+| GET    | `/v1/admin/stats`     | implemented | `X-API-Key` + role `admin` | Statistik platform      |
 | POST   | `/v1/downloads`       | skeleton    | `X-API-Key` wajib   | Resolve/download media (Facebook via fget.io, Instagram official + snapinsta, TikTok snaptik + official, Shopee official + shopeenowatermark) |
 | GET    | `/v1/youtube/search`  | implemented | `X-API-Key` wajib   | Cari video YouTube (param `q`)         |
 | GET    | `/v1/youtube/formats` | implemented | `X-API-Key` wajib   | Katalog format konversi YouTube        |

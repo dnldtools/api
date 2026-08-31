@@ -1,6 +1,7 @@
 package http
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -18,9 +19,16 @@ type Response struct {
 }
 
 func WriteSuccess(w http.ResponseWriter, r *http.Request, status int, data interface{}) {
+	WriteSuccessWithMessage(w, r, status, http.StatusText(status), data)
+}
+
+func WriteSuccessWithMessage(w http.ResponseWriter, r *http.Request, status int, message string, data interface{}) {
+	if message == "" {
+		message = http.StatusText(status)
+	}
 	writeJSON(w, r, status, Response{
 		Success:   true,
-		Message:   http.StatusText(status),
+		Message:   message,
 		Data:      data,
 		RequestID: requestIDFromContext(r.Context()),
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -36,19 +44,16 @@ func writeError(w http.ResponseWriter, r *http.Request, appErr *apperrors.AppErr
 }
 
 func writeJSON(w http.ResponseWriter, r *http.Request, status int, payload interface{}) {
-	var (
-		data []byte
-		err  error
-	)
-
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	// Disable HTML escaping so URLs with query strings keep literal `&`
+	// characters instead of being re-encoded as \u0026.
+	enc.SetEscapeHTML(false)
 	if prettyFromContext(r) {
-		data, err = json.MarshalIndent(payload, "", "  ")
-	} else {
-		data, err = json.Marshal(payload)
+		enc.SetIndent("", "  ")
 	}
 
-	if err != nil {
-
+	if err := enc.Encode(payload); err != nil {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte(`{"success":false,"message":"failed to encode response","error":{"code":"INTERNAL_ERROR","category":"INTERNAL","details":null,"retryable":false,"request_id":"","timestamp":""}}` + "\n"))
@@ -57,8 +62,7 @@ func writeJSON(w http.ResponseWriter, r *http.Request, status int, payload inter
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	_, _ = w.Write(data)
-	_, _ = w.Write([]byte("\n"))
+	_, _ = w.Write(buf.Bytes())
 }
 
 func decodeJSON(r *http.Request, dst interface{}) error {

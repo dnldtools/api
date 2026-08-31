@@ -51,6 +51,46 @@ func (s *Service) RevokeKey(ctx context.Context, accountID, keyID int64) error {
 	return s.repo.RevokeKey(ctx, accountID, keyID)
 }
 
+func (s *Service) ListAccounts(ctx context.Context) ([]AccountSummary, error) {
+	return s.repo.ListAccounts(ctx)
+}
+
+func (s *Service) GetAccount(ctx context.Context, id int64) (*AccountSummary, error) {
+	return s.repo.FindAccountSummary(ctx, id)
+}
+
+func (s *Service) UpdateAccount(ctx context.Context, id int64, changes AccountChanges) (*Account, error) {
+	return s.repo.UpdateAccount(ctx, id, changes)
+}
+
+func (s *Service) DisableAccount(ctx context.Context, id int64) error {
+	return s.repo.DisableAccount(ctx, id)
+}
+
+func (s *Service) ListAllKeys(ctx context.Context) ([]APIKeySummary, error) {
+	return s.repo.ListAllKeys(ctx)
+}
+
+func (s *Service) GetKey(ctx context.Context, id int64) (*APIKeySummary, error) {
+	return s.repo.FindKeyByID(ctx, id)
+}
+
+func (s *Service) UpdateKey(ctx context.Context, id int64, changes KeyChanges) (*APIKeySummary, error) {
+	return s.repo.UpdateKey(ctx, id, changes)
+}
+
+func (s *Service) RevokeKeyByID(ctx context.Context, id int64) error {
+	return s.repo.RevokeKeyByID(ctx, id)
+}
+
+func (s *Service) AccountCount(ctx context.Context) (int64, error) {
+	return s.repo.CountAccounts(ctx)
+}
+
+func (s *Service) KeyCounts(ctx context.Context) (map[KeyStatus]int64, error) {
+	return s.repo.CountKeysByStatus(ctx)
+}
+
 func (s *Service) Authenticate(ctx context.Context, rawKey string) (*Identity, error) {
 	if rawKey == "" {
 		return nil, apperrors.APIKeyMissing("api key is required")

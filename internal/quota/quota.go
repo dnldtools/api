@@ -37,6 +37,8 @@ type Repository interface {
 	Increment(ctx context.Context, accountID int64, plan plans.Plan, success bool, dailyStart, monthlyStart time.Time) error
 
 	Usage(ctx context.Context, accountID int64, dailyStart, monthlyStart time.Time) (Usage, error)
+
+	TotalUsage(ctx context.Context, dailyStart, monthlyStart time.Time) (Usage, error)
 }
 
 type Counter interface {
@@ -49,6 +51,8 @@ type Service interface {
 	Record(ctx context.Context, accountID int64, plan plans.Plan, statusCode int)
 
 	Usage(ctx context.Context, accountID int64, plan plans.Plan) (UsageReport, error)
+
+	TotalUsage(ctx context.Context) (Usage, error)
 }
 
 func PeriodStarts(now time.Time) (daily, monthly time.Time) {

@@ -84,6 +84,58 @@ func (r *PostgresRepository) Aggregate(ctx context.Context, from, to time.Time) 
 	}, nil
 }
 
+func (r *PostgresRepository) EndpointBreakdown(ctx context.Context, from, to time.Time) ([]EndpointStat, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT endpoint, COUNT(*)
+		FROM api_metrics
+		WHERE created_at >= $1 AND created_at < $2
+		GROUP BY endpoint
+		ORDER BY COUNT(*) DESC, endpoint`, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	stats := make([]EndpointStat, 0)
+	for rows.Next() {
+		var s EndpointStat
+		if err := rows.Scan(&s.Endpoint, &s.Requests); err != nil {
+			return nil, err
+		}
+		stats = append(stats, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return stats, nil
+}
+
+func (r *PostgresRepository) PlatformBreakdown(ctx context.Context, from, to time.Time) ([]PlatformStat, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT COALESCE(platform, ''), COUNT(*)
+		FROM api_metrics
+		WHERE created_at >= $1 AND created_at < $2
+		GROUP BY platform
+		ORDER BY COUNT(*) DESC, platform`, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	stats := make([]PlatformStat, 0)
+	for rows.Next() {
+		var s PlatformStat
+		if err := rows.Scan(&s.Platform, &s.Requests); err != nil {
+			return nil, err
+		}
+		stats = append(stats, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return stats, nil
+}
+
 func nullableText(s string) pgtype.Text {
 	if s == "" {
 		return pgtype.Text{Valid: false}

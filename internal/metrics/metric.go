@@ -52,6 +52,18 @@ type Stats struct {
 	AvgDurationMs      float64 `json:"avg_duration_ms"`
 }
 
+// EndpointStat is a per-path request count for admin stats.
+type EndpointStat struct {
+	Endpoint string `json:"endpoint"`
+	Requests int64  `json:"requests"`
+}
+
+// PlatformStat is a per-platform request count for admin stats.
+type PlatformStat struct {
+	Platform string `json:"platform"`
+	Requests int64  `json:"requests"`
+}
+
 func SuccessRate(success, total int64) float64 {
 	if total <= 0 {
 		return 0

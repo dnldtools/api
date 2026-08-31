@@ -1,6 +1,13 @@
 package youtube
 
-import "testing"
+import (
+	"context"
+	"encoding/binary"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+)
 
 func TestResolveFormatByPreset(t *testing.T) {
 	tests := []struct {
@@ -109,6 +116,12 @@ func TestWatchURL(t *testing.T) {
 	}
 }
 
+func TestCoverURL(t *testing.T) {
+	if got := coverURL("jNQXAC9IVRw"); got != "https://i.ytimg.com/vi/jNQXAC9IVRw/hqdefault.jpg?source=api.dnld.app" {
+		t.Errorf("coverURL = %q", got)
+	}
+}
+
 func TestRelay(t *testing.T) {
 	hub := "https://hub.convert1s.com"
 	tests := []struct {
@@ -175,5 +188,176 @@ func TestFormatsCatalogHasDefaults(t *testing.T) {
 	}
 	if !hasDefault(c.Audio) || !hasDefault(c.Video) {
 		t.Error("catalog must mark a default audio and video format")
+	}
+}
+
+// mp3FrameBytes builds a valid MPEG-1 Layer III frame header for the given
+// bitrate (kbps) and sample rate (Hz), followed by a few bytes of fake frame
+// payload so probeMP3 has something to scan.
+func mp3FrameBytes(bitrate, sampleRate int) []byte {
+	var bitrateIdx int
+	for i, v := range []int{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320} {
+		if v == bitrate {
+			bitrateIdx = i
+			break
+		}
+	}
+
+	var sampleRateIdx int
+	switch sampleRate {
+	case 48000:
+		sampleRateIdx = 1
+	case 32000:
+		sampleRateIdx = 2
+	default:
+		sampleRateIdx = 0 // 44100
+	}
+
+	h := uint32(0xFFE00000) // sync
+	h |= 3 << 19            // MPEG-1
+	h |= 1 << 17            // Layer III
+	h |= 1 << 16            // protection bit (no CRC)
+	h |= uint32(bitrateIdx) << 12
+	h |= uint32(sampleRateIdx) << 10
+
+	out := make([]byte, 4+16)
+	binary.BigEndian.PutUint32(out[:4], h)
+	return out
+}
+
+func TestProbeMP3(t *testing.T) {
+	bitrate, sampleRate, ok := probeMP3(mp3FrameBytes(192, 44100))
+	if !ok {
+		t.Fatal("probeMP3 did not find a frame header")
+	}
+	if bitrate != 192 {
+		t.Errorf("bitrate = %d, want 192", bitrate)
+	}
+	if sampleRate != 44100 {
+		t.Errorf("sampleRate = %d, want 44100", sampleRate)
+	}
+}
+
+func TestProbeMP3SkipsID3v2(t *testing.T) {
+	// 10-byte ID3v2 header + 20-byte tag body, then the MP3 frame.
+	tag := []byte{'I', 'D', '3', 0x03, 0x00, 0x00, 0, 0, 0, 20}
+	tag = append(tag, make([]byte, 20)...)
+	data := append(tag, mp3FrameBytes(128, 44100)...)
+
+	bitrate, _, ok := probeMP3(data)
+	if !ok {
+		t.Fatal("probeMP3 did not skip the ID3v2 tag")
+	}
+	if bitrate != 128 {
+		t.Errorf("bitrate = %d, want 128", bitrate)
+	}
+}
+
+func TestProbeMP3RejectsGarbage(t *testing.T) {
+	if _, _, ok := probeMP3([]byte("not an mp3 file at all")); ok {
+		t.Error("probeMP3 should reject non-MPEG data")
+	}
+}
+
+func TestParseKbps(t *testing.T) {
+	tests := []struct {
+		in  string
+		out int
+		ok  bool
+	}{
+		{"192kbps", 192, true},
+		{" 320KBPS ", 320, true},
+		{"320", 320, true},
+		{"best", 0, false},
+		{"720p", 0, false},
+		{"", 0, false},
+		{"0kbps", 0, false},
+	}
+	for _, tc := range tests {
+		out, ok := parseKbps(tc.in)
+		if ok != tc.ok || out != tc.out {
+			t.Errorf("parseKbps(%q) = (%d, %v), want (%d, %v)", tc.in, out, ok, tc.out, tc.ok)
+		}
+	}
+}
+
+func TestQualityNote(t *testing.T) {
+	if got := qualityNote("320kbps", "192kbps"); got != "Converted, quality adjusted to 192kbps" {
+		t.Errorf("qualityNote = %q", got)
+	}
+	if got := qualityNote("320kbps", "320kbps"); got != "" {
+		t.Errorf("qualityNote(equal) = %q, want empty", got)
+	}
+}
+
+func TestSanitizeDownloadURL(t *testing.T) {
+	in := `https://x.example/files/a.mp3?token=1\u0026expires=2`
+	want := "https://x.example/files/a.mp3?token=1&expires=2"
+	if got := sanitizeDownloadURL(in); got != want {
+		t.Errorf("sanitizeDownloadURL = %q, want %q", got, want)
+	}
+}
+
+func TestFormatSpecFrom(t *testing.T) {
+	f := Format{ID: "mp3-320", Type: "audio", Format: "mp3", Quality: "320kbps"}
+	got := formatSpecFrom(f)
+	if got.ID != "mp3-320" || got.Type != "audio" || got.Format != "mp3" || got.Quality != "320kbps" {
+		t.Errorf("formatSpecFrom = %+v", got)
+	}
+}
+
+func TestApplyQualityUsesProbeBitrate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write(mp3FrameBytes(192, 44100))
+	}))
+	defer server.Close()
+
+	svc := NewWithConfig(Config{HTTPClient: server.Client(), RequestTimeout: time.Second})
+	res := &ConvertResult{DownloadURL: server.URL + "/file.mp3"}
+	requested := Format{ID: "mp3-320", Type: "audio", Format: "mp3", Quality: "320kbps"}
+
+	svc.applyQuality(context.Background(), res, requested, completedJob{
+		SelectedQuality: "192kbps",
+		QualityChanged:  true,
+	})
+
+	if res.Output.Quality != "192kbps" {
+		t.Errorf("output.quality = %q, want 192kbps", res.Output.Quality)
+	}
+	if res.Output.BitrateKbps != 192 {
+		t.Errorf("output.bitrate_kbps = %d, want 192", res.Output.BitrateKbps)
+	}
+	if res.Output.ID != "mp3-192" {
+		t.Errorf("output.id = %q, want mp3-192", res.Output.ID)
+	}
+	if !res.QualityChanged {
+		t.Error("quality_changed = false, want true")
+	}
+	if res.QualityNote != "Converted, quality adjusted to 192kbps" {
+		t.Errorf("quality_note = %q", res.QualityNote)
+	}
+}
+
+func TestApplyQualityFallsBackToWorkerSelection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	svc := NewWithConfig(Config{HTTPClient: server.Client(), RequestTimeout: time.Second})
+	res := &ConvertResult{DownloadURL: server.URL + "/missing.mp3"}
+	requested := Format{ID: "mp3-320", Type: "audio", Format: "mp3", Quality: "320kbps"}
+
+	svc.applyQuality(context.Background(), res, requested, completedJob{SelectedQuality: "128kbps"})
+
+	if res.Output.Quality != "128kbps" {
+		t.Errorf("output.quality = %q, want 128kbps", res.Output.Quality)
+	}
+	if res.Output.BitrateKbps != 128 {
+		t.Errorf("output.bitrate_kbps = %d, want 128", res.Output.BitrateKbps)
+	}
+	if !res.QualityChanged {
+		t.Error("quality_changed = false, want true")
 	}
 }

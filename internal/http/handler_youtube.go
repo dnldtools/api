@@ -63,6 +63,14 @@ func handleYouTubeConvert(svc *youtube.Service, errHandler *ErrorHandler) http.H
 			return
 		}
 
-		WriteSuccess(w, r, http.StatusOK, result)
+		message := http.StatusText(http.StatusOK) // "OK"
+		if result.QualityChanged {
+			message = result.QualityNote
+			if message == "" {
+				message = "Converted, quality adjusted"
+			}
+		}
+
+		WriteSuccessWithMessage(w, r, http.StatusOK, message, result)
 	}
 }

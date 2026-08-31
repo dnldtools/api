@@ -74,6 +74,20 @@ func (s *Service) Aggregate(ctx context.Context, from, to time.Time) (Stats, err
 	return s.repo.Aggregate(ctx, from, to)
 }
 
+func (s *Service) EndpointBreakdown(ctx context.Context, from, to time.Time) ([]EndpointStat, error) {
+	if s == nil || s.repo == nil {
+		return []EndpointStat{}, nil
+	}
+	return s.repo.EndpointBreakdown(ctx, from, to)
+}
+
+func (s *Service) PlatformBreakdown(ctx context.Context, from, to time.Time) ([]PlatformStat, error) {
+	if s == nil || s.repo == nil {
+		return []PlatformStat{}, nil
+	}
+	return s.repo.PlatformBreakdown(ctx, from, to)
+}
+
 func (s *Service) Close(ctx context.Context) {
 	if s == nil {
 		return

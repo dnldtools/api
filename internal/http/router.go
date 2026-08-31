@@ -25,6 +25,8 @@ type Dependencies struct {
 
 	Keys auth.KeyManager
 
+	Admin auth.AdminManager
+
 	RateLimiter ratelimit.Limiter
 
 	Quota quota.Service
@@ -39,6 +41,15 @@ func registerProtected(mux *http.ServeMux, pattern string, h http.HandlerFunc, d
 		h,
 		authMiddleware(deps.Auth, errHandler),
 		rateLimitMiddleware(deps.RateLimiter, deps.Plans, errHandler),
+	))
+}
+
+func registerAdmin(mux *http.ServeMux, pattern string, h http.HandlerFunc, deps Dependencies, errHandler *ErrorHandler) {
+	mux.Handle(pattern, chain(
+		h,
+		authMiddleware(deps.Auth, errHandler),
+		rateLimitMiddleware(deps.RateLimiter, deps.Plans, errHandler),
+		requireAdminMiddleware(errHandler),
 	))
 }
 
@@ -79,6 +90,20 @@ func NewRouter(deps Dependencies) http.Handler {
 	registerProtected(mux, "GET /v1/keys", handleListKeys(deps.Keys, errHandler), deps, errHandler)
 	registerProtected(mux, "POST /v1/keys", handleCreateKey(deps.Keys, errHandler), deps, errHandler)
 	registerProtected(mux, "POST /v1/keys/{id}/revoke", handleRevokeKey(deps.Keys, errHandler), deps, errHandler)
+
+	registerAdmin(mux, "GET /v1/admin/accounts", handleAdminListAccounts(deps.Admin, errHandler), deps, errHandler)
+	registerAdmin(mux, "GET /v1/admin/accounts/{id}", handleAdminGetAccount(deps.Admin, errHandler), deps, errHandler)
+	registerAdmin(mux, "PATCH /v1/admin/accounts/{id}", handleAdminUpdateAccount(deps.Admin, errHandler), deps, errHandler)
+	registerAdmin(mux, "DELETE /v1/admin/accounts/{id}", handleAdminDisableAccount(deps.Admin, errHandler), deps, errHandler)
+	registerAdmin(mux, "GET /v1/admin/keys", handleAdminListKeys(deps.Admin, errHandler), deps, errHandler)
+	registerAdmin(mux, "GET /v1/admin/keys/{id}", handleAdminGetKey(deps.Admin, errHandler), deps, errHandler)
+	registerAdmin(mux, "POST /v1/admin/keys", handleAdminCreateKey(deps.Admin, errHandler), deps, errHandler)
+	registerAdmin(mux, "PATCH /v1/admin/keys/{id}", handleAdminUpdateKey(deps.Admin, errHandler), deps, errHandler)
+	registerAdmin(mux, "DELETE /v1/admin/keys/{id}", handleAdminRevokeKey(deps.Admin, errHandler), deps, errHandler)
+	registerAdmin(mux, "GET /v1/admin/stats", handleAdminStats(deps.Metrics, deps.Admin, deps.Quota, errHandler), deps, errHandler)
+
+	mux.HandleFunc("GET /favicon.ico", handleFavicon())
+	mux.HandleFunc("GET /favicon.png", handleFavicon())
 
 	mux.HandleFunc("/", handleNotFound(errHandler))
 

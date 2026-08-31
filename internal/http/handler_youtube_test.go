@@ -43,6 +43,12 @@ func newYouTubeRouter(t *testing.T, upstream http.Handler) http.Handler {
 // youtubeUpstream returns a handler emulating the convert1s hub/meta/worker
 // endpoints needed by the YouTube service.
 func youtubeUpstream(t *testing.T) http.Handler {
+	return youtubeUpstreamAt(t, 192)
+}
+
+// youtubeUpstreamAt emulates the upstream, serving an MP3 download encoded at
+// the given bitrate so quality-change behaviour can be exercised.
+func youtubeUpstreamAt(t *testing.T, mp3Bitrate int) http.Handler {
 	t.Helper()
 	var serverURL string
 
@@ -112,14 +118,32 @@ func youtubeUpstream(t *testing.T) http.Handler {
 			"progress":    100,
 			"title":       "Me at the zoo",
 			"duration":    19,
-			"downloadUrl": serverURL + "/files/job-1/output.mp3",
+			"downloadUrl": serverURL + "/files/job-1/output.mp3?token=abc&expires=123",
 		})
+	})
+
+	mux.HandleFunc("/files/job-1/output.mp3", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write(mp3Frame(mp3Bitrate))
 	})
 
 	server := httptest.NewServer(mux)
 	serverURL = server.URL
 	t.Cleanup(server.Close)
 	return mux
+}
+
+// mp3Frame returns a minimal MPEG-1 Layer III frame header (44.1 kHz, stereo)
+// for the given bitrate, plus a few bytes of fake payload.
+func mp3Frame(bitrate int) []byte {
+	var header []byte
+	switch bitrate {
+	case 320:
+		header = []byte{0xFF, 0xFB, 0xE0, 0x00}
+	default: // 192
+		header = []byte{0xFF, 0xFB, 0xB0, 0x00}
+	}
+	return append(header, make([]byte, 16)...)
 }
 
 func doYouTubeRequest(t *testing.T, h http.Handler, method, path, body string) *httptest.ResponseRecorder {
@@ -209,7 +233,8 @@ func TestYouTubeConvertReturnsDownload(t *testing.T) {
 	}
 
 	var body struct {
-		Data youtube.ConvertResult `json:"data"`
+		Message string                `json:"message"`
+		Data    youtube.ConvertResult `json:"data"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode body: %v", err)
@@ -220,8 +245,90 @@ func TestYouTubeConvertReturnsDownload(t *testing.T) {
 	if body.Data.Title != "Me at the zoo" {
 		t.Errorf("title = %q, want Me at the zoo", body.Data.Title)
 	}
-	if body.Data.Output.ID != "mp3-320" {
-		t.Errorf("output.id = %q, want mp3-320", body.Data.Output.ID)
+	if body.Data.Cover != "https://i.ytimg.com/vi/jNQXAC9IVRw/hqdefault.jpg?source=api.dnld.app" {
+		t.Errorf("cover = %q", body.Data.Cover)
+	}
+
+	// The fake upstream serves a 192kbps file, so the actual output must never
+	// claim 320kbps even though that was requested.
+	if body.Data.Requested.Quality != "320kbps" {
+		t.Errorf("requested.quality = %q, want 320kbps", body.Data.Requested.Quality)
+	}
+	if body.Data.Output.Quality != "192kbps" {
+		t.Errorf("output.quality = %q, want 192kbps", body.Data.Output.Quality)
+	}
+	if body.Data.Output.BitrateKbps != 192 {
+		t.Errorf("output.bitrate_kbps = %d, want 192", body.Data.Output.BitrateKbps)
+	}
+	if body.Data.Output.ID != "mp3-192" {
+		t.Errorf("output.id = %q, want mp3-192", body.Data.Output.ID)
+	}
+	if !body.Data.QualityChanged {
+		t.Error("quality_changed = false, want true")
+	}
+	if body.Data.QualityNote != "Converted, quality adjusted to 192kbps" {
+		t.Errorf("quality_note = %q", body.Data.QualityNote)
+	}
+	if body.Message != "Converted, quality adjusted to 192kbps" {
+		t.Errorf("message = %q, want quality-adjusted message", body.Message)
+	}
+}
+
+func TestYouTubeConvertNoQualityChange(t *testing.T) {
+	h := newYouTubeRouter(t, youtubeUpstreamAt(t, 320))
+
+	rec := doYouTubeRequest(t, h, http.MethodPost, "/v1/youtube/convert",
+		`{"url":"https://www.youtube.com/watch?v=jNQXAC9IVRw","preset":"mp3-320"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Message string                `json:"message"`
+		Data    youtube.ConvertResult `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Data.Output.Quality != "320kbps" {
+		t.Errorf("output.quality = %q, want 320kbps", body.Data.Output.Quality)
+	}
+	if body.Data.Output.BitrateKbps != 320 {
+		t.Errorf("output.bitrate_kbps = %d, want 320", body.Data.Output.BitrateKbps)
+	}
+	if body.Data.QualityChanged {
+		t.Error("quality_changed = true, want false")
+	}
+	if body.Message != "OK" {
+		t.Errorf("message = %q, want OK", body.Message)
+	}
+}
+
+func TestYouTubeConvertDownloadURLKeepsAmpersand(t *testing.T) {
+	h := newYouTubeRouter(t, youtubeUpstream(t))
+
+	rec := doYouTubeRequest(t, h, http.MethodPost, "/v1/youtube/convert",
+		`{"url":"https://www.youtube.com/watch?v=jNQXAC9IVRw","preset":"mp3-320"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	raw := rec.Body.String()
+	if strings.Contains(raw, `\u0026`) {
+		t.Errorf("response re-encoded ampersand as \\u0026: %s", raw)
+	}
+	if !strings.Contains(raw, "token=abc&expires=123") {
+		t.Errorf("response should contain a literal & in download_url: %s", raw)
+	}
+
+	var body struct {
+		Data youtube.ConvertResult `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if !strings.Contains(body.Data.DownloadURL, "token=abc&expires=123") {
+		t.Errorf("download_url = %q, want token=abc&expires=123", body.Data.DownloadURL)
 	}
 }
 
