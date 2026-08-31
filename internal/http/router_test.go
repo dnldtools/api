@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"rest-api/internal/downloader"
-	"rest-api/internal/health"
 	"rest-api/internal/ratelimit"
+	"rest-api/internal/youtube"
 )
 
 func newTestRouter(t *testing.T) http.Handler {
@@ -22,8 +22,8 @@ func newTestRouter(t *testing.T) http.Handler {
 	return NewRouter(Dependencies{
 		PrettyJSON:  false,
 		Logger:      slog.Default(),
-		Health:      health.New("test"),
 		Downloader:  svc,
+		Youtube:     youtube.New(),
 		Auth:        &fakeAuthenticator{},
 		Keys:        &fakeKeyManager{},
 		RateLimiter: ratelimit.NewMemoryLimiter(),
@@ -31,11 +31,12 @@ func newTestRouter(t *testing.T) http.Handler {
 	})
 }
 
-func TestRouterInitializesAndServesHealth(t *testing.T) {
+func TestRouterServesYouTubeFormats(t *testing.T) {
 	router := newTestRouter(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/youtube/formats", nil)
+	req.Header.Set("X-API-Key", testAPIKey)
 	router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -52,7 +53,8 @@ func TestRouterInitializesAndServesHealth(t *testing.T) {
 		Success   bool   `json:"success"`
 		RequestID string `json:"request_id"`
 		Data      struct {
-			Status string `json:"status"`
+			Audio []youtube.Format `json:"audio"`
+			Video []youtube.Format `json:"video"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
@@ -61,8 +63,8 @@ func TestRouterInitializesAndServesHealth(t *testing.T) {
 	if !body.Success {
 		t.Error("success = false, want true")
 	}
-	if body.Data.Status != "ok" {
-		t.Errorf("data.status = %q, want ok", body.Data.Status)
+	if len(body.Data.Audio) == 0 || len(body.Data.Video) == 0 {
+		t.Error("youtube formats catalog should not be empty")
 	}
 	if body.RequestID == "" {
 		t.Error("request_id should be present in the JSON body")

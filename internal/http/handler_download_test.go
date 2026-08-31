@@ -13,7 +13,6 @@ import (
 
 	"rest-api/internal/downloader"
 	"rest-api/internal/downloader/providers"
-	"rest-api/internal/health"
 	"rest-api/internal/ratelimit"
 )
 
@@ -22,7 +21,6 @@ func newRouterWithService(t *testing.T, svc *downloader.Service) http.Handler {
 	return NewRouter(Dependencies{
 		PrettyJSON:  false,
 		Logger:      slog.Default(),
-		Health:      health.New("test"),
 		Downloader:  svc,
 		Auth:        &fakeAuthenticator{},
 		RateLimiter: ratelimit.NewMemoryLimiter(),

@@ -64,8 +64,8 @@ func TestNewWiresDependencies(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	if a.health == nil {
-		t.Error("health checker not wired")
+	if a.youtube == nil {
+		t.Error("youtube service not wired")
 	}
 	if a.downloader == nil {
 		t.Error("downloader service not wired")

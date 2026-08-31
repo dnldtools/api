@@ -6,6 +6,7 @@ import (
 	"rest-api/internal/browser"
 	"rest-api/internal/downloader"
 	apperrors "rest-api/internal/errors"
+	"rest-api/internal/youtube"
 )
 
 func mapError(err error) *apperrors.AppError {
@@ -32,6 +33,21 @@ func mapError(err error) *apperrors.AppError {
 		return apperrors.ProviderInvalidResponse("provider returned an invalid response").WithCause(err)
 	case stderrors.Is(err, downloader.ErrMediaNotFound):
 		return apperrors.MediaNotFound("media not found").WithCause(err)
+
+	case stderrors.Is(err, youtube.ErrInvalidURL):
+		return apperrors.Validation(apperrors.CodeInvalidURL, "url is required").WithCause(err)
+	case stderrors.Is(err, youtube.ErrQueryRequired):
+		return apperrors.Validation(apperrors.CodeMissingParameter, "query is required").WithCause(err)
+	case stderrors.Is(err, youtube.ErrFormatUnavailable):
+		return apperrors.Validation(apperrors.CodeFormatNotAvailable, "requested format is not available").WithCause(err)
+	case stderrors.Is(err, youtube.ErrProviderUnavailable):
+		return apperrors.ProviderUnavailable("youtube provider is unavailable").WithCause(err)
+	case stderrors.Is(err, youtube.ErrProviderTimeout):
+		return apperrors.ProviderTimeout("youtube provider timed out").WithCause(err)
+	case stderrors.Is(err, youtube.ErrProviderInvalidResponse):
+		return apperrors.ProviderInvalidResponse("youtube provider returned an invalid response").WithCause(err)
+	case stderrors.Is(err, youtube.ErrMediaNotFound):
+		return apperrors.MediaNotFound("video not found").WithCause(err)
 
 	case stderrors.Is(err, browser.ErrManagerClosed),
 		stderrors.Is(err, browser.ErrNotStarted),

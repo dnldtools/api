@@ -14,12 +14,12 @@ import (
 	"rest-api/internal/database"
 	"rest-api/internal/downloader"
 	"rest-api/internal/downloader/providers"
-	"rest-api/internal/health"
 	apphttp "rest-api/internal/http"
 	"rest-api/internal/metrics"
 	"rest-api/internal/plans"
 	"rest-api/internal/quota"
 	"rest-api/internal/ratelimit"
+	"rest-api/internal/youtube"
 )
 
 const bootstrapTimeout = 30 * time.Second
@@ -34,8 +34,8 @@ type Application struct {
 	cfg    *config.Config
 	logger *slog.Logger
 
-	health     *health.Checker
 	downloader *downloader.Service
+	youtube    *youtube.Service
 	browser    browser.Manager
 
 	db      *database.DB
@@ -55,13 +55,12 @@ func New(cfg *config.Config, logger *slog.Logger) (*Application, error) {
 
 	a := &Application{cfg: cfg, logger: logger}
 
-	a.health = health.New(cfg.AppVersion)
-
 	registry := downloader.NewRegistry()
 	if err := providers.RegisterAll(registry); err != nil {
 		return nil, fmt.Errorf("app: register providers: %w", err)
 	}
 	a.downloader = downloader.NewService(registry)
+	a.youtube = youtube.New()
 
 	if cfg.Browser.Enabled {
 		mgr, err := browser.NewManager(cfg.Browser, browserLauncherFactory())
@@ -163,8 +162,8 @@ func New(cfg *config.Config, logger *slog.Logger) (*Application, error) {
 	router := apphttp.NewRouter(apphttp.Dependencies{
 		PrettyJSON:   cfg.PrettyJSON,
 		Logger:       logger,
-		Health:       a.health,
 		Downloader:   a.downloader,
+		Youtube:      a.youtube,
 		Metrics:      a.metrics,
 		Auth:         authSvc,
 		Keys:         keySvc,

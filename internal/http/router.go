@@ -6,18 +6,18 @@ import (
 
 	"rest-api/internal/auth"
 	"rest-api/internal/downloader"
-	"rest-api/internal/health"
 	"rest-api/internal/metrics"
 	"rest-api/internal/plans"
 	"rest-api/internal/quota"
 	"rest-api/internal/ratelimit"
+	"rest-api/internal/youtube"
 )
 
 type Dependencies struct {
 	PrettyJSON bool
 	Logger     *slog.Logger
-	Health     *health.Checker
 	Downloader *downloader.Service
+	Youtube    *youtube.Service
 
 	Metrics *metrics.Service
 
@@ -53,8 +53,6 @@ func NewRouter(deps Dependencies) http.Handler {
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /health", handleHealth(deps.Health))
-
 	downloadHandler := handleDownload(deps.Downloader, errHandler)
 	protected := chain(
 		downloadHandler,
@@ -63,6 +61,18 @@ func NewRouter(deps Dependencies) http.Handler {
 		quotaMiddleware(deps.Quota, errHandler),
 	)
 	mux.Handle("POST /v1/downloads", protected)
+
+	youtubeConvertHandler := handleYouTubeConvert(deps.Youtube, errHandler)
+	youtubeConvert := chain(
+		youtubeConvertHandler,
+		authMiddleware(deps.Auth, errHandler),
+		rateLimitMiddleware(deps.RateLimiter, deps.Plans, errHandler),
+		quotaMiddleware(deps.Quota, errHandler),
+	)
+	mux.Handle("POST /v1/youtube/convert", youtubeConvert)
+
+	registerProtected(mux, "GET /v1/youtube/search", handleYouTubeSearch(deps.Youtube, errHandler), deps, errHandler)
+	registerProtected(mux, "GET /v1/youtube/formats", handleYouTubeFormats(deps.Youtube, errHandler), deps, errHandler)
 
 	registerProtected(mux, "GET /v1/account", handleAccount(errHandler), deps, errHandler)
 	registerProtected(mux, "GET /v1/usage", handleUsage(deps.Quota, deps.Plans, errHandler), deps, errHandler)

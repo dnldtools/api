@@ -11,7 +11,6 @@ import (
 
 	"rest-api/internal/auth"
 	"rest-api/internal/downloader"
-	"rest-api/internal/health"
 	"rest-api/internal/plans"
 	"rest-api/internal/quota"
 	"rest-api/internal/ratelimit"
@@ -33,7 +32,6 @@ func newAccountRouter(t *testing.T, keys auth.KeyManager, quotaSvc quota.Service
 	return NewRouter(Dependencies{
 		PrettyJSON:  false,
 		Logger:      slog.Default(),
-		Health:      health.New("test"),
 		Downloader:  svc,
 		Auth:        &fakeAuthenticator{},
 		Keys:        keys,

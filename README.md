@@ -1,13 +1,14 @@
 # rest-api
 
 REST API untuk mengunduh media dari berbagai platform (saat ini Facebook,
-Instagram, TikTok, dan Shopee; platform lain menyusul).
+Instagram, TikTok, Shopee, dan YouTube; platform lain menyusul).
 
 > **Status:** Facebook sudah terimplementasi (via fget.io), Instagram
 > (official API relay + snapinsta fallback), TikTok (snaptik
-> fallback utama + official rehydration relay), dan Shopee (official
-> watermark + shopeenowatermark lewat proxy). Platform lain ditambahkan
-> sesuai scraper yang dikirim kemudian.
+> fallback utama + official rehydration relay), Shopee (official
+> watermark + shopeenowatermark lewat proxy), dan YouTube (search + format
+> catalog + konversi via convert1s). Platform lain ditambahkan sesuai scraper
+> yang dikirim kemudian.
 
 ---
 
@@ -28,7 +29,8 @@ Instagram, TikTok, dan Shopee; platform lain menyusul).
   diimplementasikan.
 - REST API **full JSON** dengan schema response & error yang konsisten.
 - Opsi **pretty / indented JSON** untuk development.
-- Health-check endpoint.
+- Fitur YouTube: pencarian, katalog format, dan konversi/download via convert1s
+  (lihat [YOUTUBE.md](docs/YOUTUBE.md)).
 - Konfigurasi via environment variable + `.env`.
 - Lapisan browser automation (Playwright) yang terabstraksi dan **opsional**
   (nonaktif secara default; lihat [BROWSER.md](docs/BROWSER.md)), termasuk
@@ -58,7 +60,6 @@ rest-api/
 ├── internal/
 │   ├── app/                # Application bootstrap / composition root (wiring + lifecycle)
 │   ├── config/              # Config loader
-│   ├── health/              # Logika health-check
 │   ├── errors/              # Centralized application error system
 │   ├── http/                # Router, server, middleware, handler, response & error helper
 │   ├── auth/                # API-key authentication (akun, key, service, repo)
@@ -67,6 +68,7 @@ rest-api/
 │   ├── quota/               # Kuota harian/bulanan (Postgres source of truth)
 │   ├── downloader/          # Domain + engine (types, Provider/Resolver interface, Registry, Service)
 │   │   └── providers/       # Adapter platform (facebook, instagram, tiktok, shopee)
+│   ├── youtube/             # Layanan YouTube (search, formats, convert) via convert1s
 │   ├── browser/             # Abstraksi browser automation + adapter Playwright
 │   ├── database/            # PostgreSQL: connection pool + migration runner
 │   ├── cache/               # Redis: client (counter best-effort)
@@ -104,27 +106,32 @@ go run ./cmd/api
 go run ./cmd/devkey -name dev -plan pro -key-name dev-cli
 
 # 4. Coba endpoint
-curl http://localhost:8080/health
 curl -X POST http://localhost:8080/v1/downloads \
      -H "Content-Type: application/json" \
      -H "X-API-Key: <raw key dari devkey>" \
      -d '{"platform":"facebook","url":"https://www.facebook.com/reel/123456"}'
+
+# Cari video YouTube (butuh API key)
+curl "http://localhost:8080/v1/youtube/search?q=lofi" \
+     -H "X-API-Key: <raw key dari devkey>"
 ```
 
-> `GET /health` publik; endpoint `/v1/...` mewajibkan `X-API-Key`. Tanpa key
-> → 401, akun suspended/disabled → 403, rate limit/kuota habis → 429.
+> Seluruh endpoint `/v1/...` mewajibkan `X-API-Key`. Tanpa key → 401, akun
+> suspended/disabled → 403, rate limit/kuota habis → 429.
 
 ## Endpoint
 
-| Method | Path                 | Status      | Auth                | Deskripsi                              |
-| ------ | -------------------- | ----------- | ------------------- | -------------------------------------- |
-| GET    | `/health`            | implemented | publik              | Health check                           |
-| GET    | `/v1/account`        | implemented | `X-API-Key` wajib   | Info akun                              |
-| GET    | `/v1/usage`          | implemented | `X-API-Key` wajib   | Plan, rate limit, kuota terpakai       |
-| GET    | `/v1/keys`           | implemented | `X-API-Key` wajib   | Daftar API key                         |
-| POST   | `/v1/keys`           | implemented | `X-API-Key` wajib   | Buat API key baru                      |
-| POST   | `/v1/keys/{id}/revoke`| implemented| `X-API-Key` wajib   | Cabut API key                          |
-| POST   | `/v1/downloads`      | skeleton    | `X-API-Key` wajib   | Resolve/download media (Facebook via fget.io, Instagram official + snapinsta, TikTok snaptik + official, Shopee official + shopeenowatermark) |
+| Method | Path                  | Status      | Auth                | Deskripsi                              |
+| ------ | --------------------- | ----------- | ------------------- | -------------------------------------- |
+| GET    | `/v1/account`         | implemented | `X-API-Key` wajib   | Info akun                              |
+| GET    | `/v1/usage`           | implemented | `X-API-Key` wajib   | Plan, rate limit, kuota terpakai       |
+| GET    | `/v1/keys`            | implemented | `X-API-Key` wajib   | Daftar API key                         |
+| POST   | `/v1/keys`            | implemented | `X-API-Key` wajib   | Buat API key baru                      |
+| POST   | `/v1/keys/{id}/revoke`| implemented | `X-API-Key` wajib   | Cabut API key                          |
+| POST   | `/v1/downloads`       | skeleton    | `X-API-Key` wajib   | Resolve/download media (Facebook via fget.io, Instagram official + snapinsta, TikTok snaptik + official, Shopee official + shopeenowatermark) |
+| GET    | `/v1/youtube/search`  | implemented | `X-API-Key` wajib   | Cari video YouTube (param `q`)         |
+| GET    | `/v1/youtube/formats` | implemented | `X-API-Key` wajib   | Katalog format konversi YouTube        |
+| POST   | `/v1/youtube/convert` | implemented | `X-API-Key` wajib   | Konversi/download video YouTube (kuota) |
 
 Semua response (termasuk 404) selalu dalam format JSON.
 
@@ -139,7 +146,7 @@ PRETTY_JSON=true
 atau per-request dengan query parameter:
 
 ```bash
-curl "http://localhost:8080/health?pretty=1"
+curl "http://localhost:8080/v1/account?pretty=1" -H "X-API-Key: <key>"
 ```
 
 ## Dokumentasi
@@ -150,6 +157,7 @@ curl "http://localhost:8080/health?pretty=1"
 - [API](docs/API.md) — Kontrak API & schema response/error
 - [Downloader](docs/DOWNLOADER.md) — Kontrak domain downloader (request/result/interface/alur)
 - [Providers](docs/PROVIDERS.md) — Arsitektur provider (type, capability, registrasi, implementasi)
+- [YouTube](docs/YOUTUBE.md) — Layanan YouTube (search, formats, convert via convert1s)
 - [OpenAPI](docs/openapi.yaml) — Spesifikasi OpenAPI 3.0 (source of truth kontrak)
 - [Flow](docs/FLOW.md) — Alur request & data
 - [Auth](docs/AUTH.md) — Autentikasi API key, akun, dan hash key

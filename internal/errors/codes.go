@@ -29,6 +29,7 @@ const (
 	CodeInvalidJSON         Code = "INVALID_JSON"
 	CodeMissingParameter    Code = "MISSING_PARAMETER"
 	CodeUnsupportedPlatform Code = "UNSUPPORTED_PLATFORM"
+	CodeFormatNotAvailable  Code = "FORMAT_NOT_AVAILABLE"
 
 	CodeAuthenticationRequired Code = "AUTHENTICATION_REQUIRED"
 	CodeInvalidAPIKey          Code = "INVALID_API_KEY"

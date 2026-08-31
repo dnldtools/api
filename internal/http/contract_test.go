@@ -12,8 +12,10 @@ import (
 )
 
 var contractRoutes = map[string][]string{
-	"/health":              {"get"},
 	"/v1/downloads":        {"post"},
+	"/v1/youtube/search":   {"get"},
+	"/v1/youtube/formats":  {"get"},
+	"/v1/youtube/convert":  {"post"},
 	"/v1/account":          {"get"},
 	"/v1/usage":            {"get"},
 	"/v1/keys":             {"get", "post"},
@@ -106,8 +108,10 @@ func TestOpenAPINoAPIPrefix(t *testing.T) {
 func TestOpenAPIEndpointStatusAnnotations(t *testing.T) {
 	doc := loadOpenAPIDoc(t)
 	want := map[string]map[string]string{
-		"/health":              {"get": "implemented"},
 		"/v1/downloads":        {"post": "skeleton"},
+		"/v1/youtube/search":   {"get": "implemented"},
+		"/v1/youtube/formats":  {"get": "implemented"},
+		"/v1/youtube/convert":  {"post": "implemented"},
 		"/v1/account":          {"get": "implemented"},
 		"/v1/usage":            {"get": "implemented"},
 		"/v1/keys":             {"get": "implemented", "post": "implemented"},
@@ -137,11 +141,14 @@ func TestOpenAPIAPIDocumentsAPIKeyIdentification(t *testing.T) {
 	}
 }
 
-func TestOpenAPIDownloadsRequiresAPIKeyAndHealthIsPublic(t *testing.T) {
+func TestOpenAPIProtectedEndpointsRequireAPIKey(t *testing.T) {
 	doc := loadOpenAPIDoc(t)
 
 	protected := map[string][]string{
 		"/v1/downloads":        {"post"},
+		"/v1/youtube/search":   {"get"},
+		"/v1/youtube/formats":  {"get"},
+		"/v1/youtube/convert":  {"post"},
 		"/v1/account":          {"get"},
 		"/v1/usage":            {"get"},
 		"/v1/keys":             {"get", "post"},
@@ -164,9 +171,5 @@ func TestOpenAPIDownloadsRequiresAPIKeyAndHealthIsPublic(t *testing.T) {
 				t.Errorf("%s %s security must reference ApiKeyAuth", method, path)
 			}
 		}
-	}
-
-	if h := doc.Paths["/health"]["get"]; len(h.Security) != 0 {
-		t.Error("/health must remain public (no security scheme)")
 	}
 }
