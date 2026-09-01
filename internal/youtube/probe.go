@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -46,6 +47,10 @@ func (s *Service) probe(ctx context.Context, downloadURL, expectedFormat string)
 	res.SizeBytes = resp.ContentLength
 	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
 	res.Codec = codecFromContentType(contentType, expectedFormat)
+
+	if res.SizeBytes <= 0 {
+		res.SizeBytes = s.probeSize(ctx, downloadURL)
+	}
 
 	switch {
 	case expectedFormat == "mp3" || strings.Contains(contentType, "mpeg"):
@@ -212,6 +217,53 @@ func probeFLAC(data []byte, fileSize int64) (int, bool) {
 		return 0, false
 	}
 	return kbps, true
+}
+
+func (s *Service) probeSize(ctx context.Context, downloadURL string) int64 {
+	reqCtx, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return 0
+	}
+	req.Header.Set("User-Agent", s.cfg.UserAgent)
+	req.Header.Set("Range", "bytes=0-0")
+
+	client := s.client
+	if client == nil {
+		client = http.DefaultClient
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64))
+
+	if resp.StatusCode == http.StatusPartialContent {
+		return contentRangeSize(resp.Header.Get("Content-Range"))
+	}
+	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+		if resp.ContentLength > 0 {
+			return resp.ContentLength
+		}
+	}
+	return 0
+}
+
+func contentRangeSize(v string) int64 {
+	// Expected form: "bytes 0-0/123456"
+	idx := strings.LastIndexByte(v, '/')
+	if idx < 0 || idx == len(v)-1 {
+		return 0
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(v[idx+1:]), 10, 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
 }
 
 func codecFromContentType(contentType, fallback string) string {

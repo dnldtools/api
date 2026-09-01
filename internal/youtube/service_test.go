@@ -409,6 +409,21 @@ func TestProbeFLACRejectsGarbage(t *testing.T) {
 	}
 }
 
+func TestOverallBitrateKbps(t *testing.T) {
+	if got := overallBitrateKbps(48000, 3); got != 128 {
+		t.Errorf("overallBitrateKbps(48000, 3) = %d, want 128", got)
+	}
+	if got := overallBitrateKbps(0, 3); got != 0 {
+		t.Errorf("overallBitrateKbps(0, 3) = %d, want 0", got)
+	}
+	if got := overallBitrateKbps(48000, 0); got != 0 {
+		t.Errorf("overallBitrateKbps(48000, 0) = %d, want 0", got)
+	}
+	if got := overallBitrateKbps(-1, 3); got != 0 {
+		t.Errorf("overallBitrateKbps(-1, 3) = %d, want 0", got)
+	}
+}
+
 func TestParseKbps(t *testing.T) {
 	tests := []struct {
 		in  string
@@ -536,5 +551,98 @@ func TestApplyQualityWAVReportsBitrate(t *testing.T) {
 	}
 	if res.QualityChanged {
 		t.Error("quality_changed = true, want false for WAV")
+	}
+}
+
+func TestContentRangeSize(t *testing.T) {
+	if got := contentRangeSize("bytes 0-0/48000"); got != 48000 {
+		t.Errorf("contentRangeSize = %d, want 48000", got)
+	}
+	if got := contentRangeSize("bytes 0-0/*"); got != 0 {
+		t.Errorf("contentRangeSize(*) = %d, want 0", got)
+	}
+	if got := contentRangeSize(""); got != 0 {
+		t.Errorf("contentRangeSize(empty) = %d, want 0", got)
+	}
+}
+
+func TestApplyQualityVideoReportsBitrate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp4")
+		w.Header().Set("Content-Length", "48000")
+		_, _ = w.Write(make([]byte, 48000))
+	}))
+	defer server.Close()
+
+	svc := NewWithConfig(Config{HTTPClient: server.Client(), RequestTimeout: time.Second})
+	res := &ConvertResult{DownloadURL: server.URL + "/file.mp4", Duration: 3}
+	requested := Format{ID: "mp4-720", Type: "video", Format: "mp4", Quality: "720p"}
+
+	svc.applyQuality(context.Background(), res, requested, completedJob{})
+
+	if res.Output.BitrateKbps != 128 {
+		t.Errorf("output.bitrate_kbps = %d, want 128", res.Output.BitrateKbps)
+	}
+	if res.Output.Quality != "720p" {
+		t.Errorf("output.quality = %q, want 720p", res.Output.Quality)
+	}
+	if res.Output.ID != "mp4-720" {
+		t.Errorf("output.id = %q, want mp4-720", res.Output.ID)
+	}
+	if res.QualityChanged {
+		t.Error("quality_changed = true, want false for video with known duration")
+	}
+}
+
+func TestApplyQualityM4AFallsBackToOverallBitrate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/mp4")
+		w.Header().Set("Content-Length", "48000")
+		_, _ = w.Write(make([]byte, 48000))
+	}))
+	defer server.Close()
+
+	svc := NewWithConfig(Config{HTTPClient: server.Client(), RequestTimeout: time.Second})
+	res := &ConvertResult{DownloadURL: server.URL + "/file.m4a", Duration: 3}
+	requested := Format{ID: "m4a", Type: "audio", Format: "m4a"}
+
+	svc.applyQuality(context.Background(), res, requested, completedJob{})
+
+	if res.Output.BitrateKbps != 128 {
+		t.Errorf("output.bitrate_kbps = %d, want 128", res.Output.BitrateKbps)
+	}
+	if res.Output.ID != "m4a" {
+		t.Errorf("output.id = %q, want m4a", res.Output.ID)
+	}
+	if res.QualityChanged {
+		t.Error("quality_changed = true, want false")
+	}
+}
+
+func TestApplyQualityVideoBitrateViaRange(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp4")
+		if r.Header.Get("Range") == "bytes=0-0" {
+			w.Header().Set("Content-Range", "bytes 0-0/48000")
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write([]byte{0x00})
+			return
+		}
+		// Chunked response: no Content-Length, larger than the internal buffer.
+		_, _ = w.Write(make([]byte, 5000))
+	}))
+	defer server.Close()
+
+	svc := NewWithConfig(Config{HTTPClient: server.Client(), RequestTimeout: time.Second})
+	res := &ConvertResult{DownloadURL: server.URL + "/file.mp4", Duration: 3}
+	requested := Format{ID: "mp4-720", Type: "video", Format: "mp4", Quality: "720p"}
+
+	svc.applyQuality(context.Background(), res, requested, completedJob{})
+
+	if res.Output.BitrateKbps != 128 {
+		t.Errorf("output.bitrate_kbps = %d, want 128 (via Range)", res.Output.BitrateKbps)
+	}
+	if res.Output.Quality != "720p" {
+		t.Errorf("output.quality = %q, want 720p", res.Output.Quality)
 	}
 }

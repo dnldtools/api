@@ -612,6 +612,10 @@ func (s *Service) applyQuality(ctx context.Context, res *ConvertResult, requeste
 		}
 	}
 
+	if actualBitrate == 0 {
+		actualBitrate = overallBitrateKbps(probe.SizeBytes, res.Duration)
+	}
+
 	desc := describe(requested.Type, requested.Format, actualQuality)
 	res.Output = OutputSpec{
 		ID:          desc.ID,
@@ -632,6 +636,17 @@ func qualityNote(requested, actual string) string {
 		return ""
 	}
 	return "Converted, quality adjusted to " + actual
+}
+
+func overallBitrateKbps(sizeBytes, durationSec int64) int {
+	if sizeBytes <= 0 || durationSec <= 0 {
+		return 0
+	}
+	kbps := int(sizeBytes * 8 / durationSec / 1000)
+	if kbps <= 0 {
+		return 0
+	}
+	return kbps
 }
 
 func kbpsString(bitrate int) string {
