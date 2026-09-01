@@ -26,8 +26,6 @@ const (
 	maxResponseBytes   = 2 << 20
 )
 
-// Config holds the upstream endpoints and timeouts used by the YouTube
-// service. It is primarily useful for tests; production code uses New().
 type Config struct {
 	Origin         string
 	Hub            string
@@ -39,7 +37,6 @@ type Config struct {
 	HTTPClient     *http.Client
 }
 
-// DefaultConfig returns the production upstream configuration.
 func DefaultConfig() Config {
 	return Config{
 		Origin:         defaultOrigin,
@@ -52,22 +49,15 @@ func DefaultConfig() Config {
 	}
 }
 
-// Service implements YouTube search, format catalog, and conversion on top of
-// the convert1s upstream. It is a standalone domain service rather than a
-// downloader.Provider because search/formats do not fit the
-// Resolve(DownloadRequest) contract.
 type Service struct {
 	cfg    Config
 	client *http.Client
 }
 
-// New returns a Service using the production defaults.
 func New() *Service {
 	return NewWithConfig(DefaultConfig())
 }
 
-// NewWithConfig returns a Service with the given configuration. Empty values
-// are replaced with production defaults.
 func NewWithConfig(cfg Config) *Service {
 	def := DefaultConfig()
 	if cfg.Origin == "" {
@@ -98,11 +88,8 @@ func NewWithConfig(cfg Config) *Service {
 	return &Service{cfg: cfg, client: client}
 }
 
-// Formats returns the conversion format catalog.
 func (s *Service) Formats() Catalog { return Formats() }
 
-// Search queries the upstream YouTube search endpoint and returns the matching
-// results plus an opaque continuation token.
 func (s *Service) Search(ctx context.Context, query string) (*SearchResult, error) {
 	q := strings.TrimSpace(query)
 	if q == "" {
@@ -161,9 +148,6 @@ func (s *Service) Search(ctx context.Context, query string) (*SearchResult, erro
 	return result, nil
 }
 
-// Convert downloads/transcodes a YouTube video into the requested format by
-// fanning out to the convert1s worker pool and polling the resulting job
-// until it completes.
 func (s *Service) Convert(ctx context.Context, req ConvertRequest) (*ConvertResult, error) {
 	id, ok := videoID(req.URL)
 	if !ok {
@@ -224,8 +208,6 @@ func (s *Service) fetchWorkers(ctx context.Context) ([]string, error) {
 	return workerList(h), nil
 }
 
-// completedJob carries the raw fields reported by the convert1s worker for a
-// finished job, before any probe-based quality resolution.
 type completedJob struct {
 	Title            string
 	Duration         int64
@@ -236,7 +218,6 @@ type completedJob struct {
 	NeedsReencode    bool
 }
 
-// waitForCompletion polls a created job until the upstream marks it completed.
 func (s *Service) waitForCompletion(ctx context.Context, created createJobResponse) (completedJob, error) {
 	ticker := time.NewTicker(s.cfg.PollInterval)
 	defer ticker.Stop()
@@ -347,7 +328,6 @@ func (s *Service) health(ctx context.Context) (healthResponse, error) {
 	return out, nil
 }
 
-// do performs a single HTTP request with the configured per-request timeout.
 func (s *Service) do(ctx context.Context, method, target string, body []byte, headers map[string]string) ([]byte, int, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
 	defer cancel()
@@ -387,8 +367,6 @@ func (s *Service) do(ctx context.Context, method, target string, body []byte, he
 	return data, resp.StatusCode, nil
 }
 
-// --- upstream wire types -------------------------------------------------
-
 type healthResponse struct {
 	HealthyCount int `json:"healthy_count"`
 	Servers      []struct {
@@ -407,11 +385,6 @@ type createJobRequest struct {
 	Premium bool          `json:"premium,omitempty"`
 }
 
-// buildJob assembles the v3 worker payload for a resolved format and an
-// optional alternate audio track. The payload always carries `url` and
-// `os: "windows"`. The `audio` fragment (bitrate + trackId) is only attached
-// to audio conversions: audio.bitrate only for MP3 and audio.trackId only when
-// a non-origin track was requested. Video jobs never carry `audio`.
 func buildJob(videoURL string, sel formatSelection, track string) createJobRequest {
 	job := createJobRequest{
 		URL:     videoURL,
@@ -471,11 +444,6 @@ type pollResponse struct {
 	} `json:"error"`
 }
 
-// --- helpers --------------------------------------------------------------
-
-// workerList extracts healthy worker base URLs from a health response. The
-// upstream health endpoint now returns full `address` values, so those are
-// used directly (the historical name+suffix pool is no longer needed).
 func workerList(h healthResponse) []string {
 	seen := map[string]bool{}
 	out := make([]string, 0, len(h.Servers))
@@ -495,8 +463,6 @@ func workerList(h healthResponse) []string {
 
 var bareIDRe = regexp.MustCompile(`^[\w-]{11}$`)
 
-// videoID extracts the 11-character YouTube video id from a variety of URL
-// shapes (watch, youtu.be, shorts, embed, live, v) or a bare id.
 func videoID(raw string) (string, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -535,19 +501,14 @@ func videoID(raw string) (string, bool) {
 	return "", false
 }
 
-// watchURL builds the canonical watch URL for a video id.
 func watchURL(id string) string {
 	return "https://www.youtube.com/watch?v=" + id
 }
 
-// coverURL builds the i.ytimg.com thumbnail (cover) URL for a video id.
 func coverURL(id string) string {
 	return "https://i.ytimg.com/vi/" + id + "/hqdefault.jpg?source=api.dnld.app"
 }
 
-// relay rewrites worker status URLs on *.shop / *.site hosts through the hub
-// relay endpoint, mirroring the reference scraper's relay logic. Other hosts
-// are returned unchanged.
 func relay(target, hub string) string {
 	u, err := url.Parse(target)
 	if err != nil {
@@ -628,15 +589,10 @@ func firstNonZero(values ...int64) int64 {
 	return 0
 }
 
-// formatSpecFrom converts a catalog Format into the compact identity spec used
-// in the convert response.
 func formatSpecFrom(f Format) FormatSpec {
 	return FormatSpec{ID: f.ID, Type: f.Type, Format: f.Format, Quality: f.Quality}
 }
 
-// applyQuality resolves the actually produced output quality from the probed
-// download file, falling back to the worker's reported selection when probing
-// is unavailable. It never reports the requested preset as the actual output.
 func (s *Service) applyQuality(ctx context.Context, res *ConvertResult, requested Format, job completedJob) {
 	probe := s.probe(ctx, res.DownloadURL, requested.Format)
 
@@ -645,12 +601,8 @@ func (s *Service) applyQuality(ctx context.Context, res *ConvertResult, requeste
 
 	switch {
 	case probe.BitrateKbps > 0 && requested.Format == "mp3":
-		// MP3 quality is expressed as its encoded bitrate, so reflect the
-		// probed value in the quality string.
 		actualQuality = kbpsString(probe.BitrateKbps)
 	case probe.BitrateKbps > 0:
-		// WAV/FLAC: the probed bitrate is informational only; these formats
-		// carry no bitrate-based quality, so quality stays as requested.
 	case job.SelectedQuality != "":
 		actualQuality = job.SelectedQuality
 		if requested.Type == "audio" {
@@ -675,8 +627,6 @@ func (s *Service) applyQuality(ctx context.Context, res *ConvertResult, requeste
 	}
 }
 
-// qualityNote produces the human-readable note shown when the actual output
-// quality differs from the requested one.
 func qualityNote(requested, actual string) string {
 	if actual == "" || actual == requested {
 		return ""
@@ -702,9 +652,6 @@ func parseKbps(s string) (int, bool) {
 	return n, true
 }
 
-// sanitizeDownloadURL normalises any literal \u0026 escape that survived JSON
-// decoding (e.g. double-encoded upstream URLs) into a real ampersand so the
-// returned URL is immediately usable.
 func sanitizeDownloadURL(u string) string {
 	return strings.ReplaceAll(u, `\u0026`, "&")
 }

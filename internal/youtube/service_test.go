@@ -59,21 +59,18 @@ func TestResolveFormatUnknownPreset(t *testing.T) {
 	if _, err := resolveFormat(ConvertRequest{Preset: "nope"}); err != ErrFormatUnavailable {
 		t.Errorf("unknown preset error = %v, want ErrFormatUnavailable", err)
 	}
-	// Old catalog ids are gone and must not resolve.
 	if _, err := resolveFormat(ConvertRequest{Preset: "mp3-256"}); err != ErrFormatUnavailable {
 		t.Errorf("removed preset error = %v, want ErrFormatUnavailable", err)
 	}
 }
 
 func TestResolveFormatRequiresSelection(t *testing.T) {
-	// No fields → error, never a silent 320kbps default.
 	if _, err := resolveFormat(ConvertRequest{}); err != ErrFormatUnavailable {
 		t.Errorf("empty request error = %v, want ErrFormatUnavailable", err)
 	}
 }
 
 func TestResolveFormatRequiresVideoQuality(t *testing.T) {
-	// type=video + format=mp4 without quality must not silently pick a preset.
 	if _, err := resolveFormat(ConvertRequest{Type: "video", Format: "mp4"}); err != ErrFormatUnavailable {
 		t.Errorf("video without quality error = %v, want ErrFormatUnavailable", err)
 	}
@@ -86,8 +83,8 @@ func TestResolveFormatRejectsInvalidValues(t *testing.T) {
 		{Type: "audio", Format: "mp4"},
 		{Type: "video", Format: "mp4", Quality: "999p"},
 		{Format: "notarealformat"},
-		{Type: "audio", Format: "mp3"},                 // mp3 without bitrate
-		{Type: "audio", Format: "mp3", Bitrate: "999"}, // unknown bitrate
+		{Type: "audio", Format: "mp3"},
+		{Type: "audio", Format: "mp3", Bitrate: "999"},
 	}
 	for _, req := range cases {
 		if _, err := resolveFormat(req); err != ErrFormatUnavailable {
@@ -151,13 +148,11 @@ func TestBuildJobV3Payload(t *testing.T) {
 		t.Error("mp3 job must not set premium")
 	}
 
-	// Alternate track merges into the same audio object.
 	job2 := buildJob("https://www.youtube.com/watch?v=ID", sel, "en")
 	if job2.Audio == nil || job2.Audio.TrackID != "en" || job2.Audio.Bitrate != "320k" {
 		t.Errorf("track job audio = %+v, want bitrate 320k + trackId en", job2.Audio)
 	}
 
-	// Video jobs never carry an audio fragment, even when a track is requested.
 	videoSel, err := resolveFormat(ConvertRequest{Preset: "mp4-720"})
 	if err != nil {
 		t.Fatal(err)
@@ -286,9 +281,6 @@ func TestFormatsCatalog(t *testing.T) {
 	assertIDs(c.Video, wantVideo, "video")
 }
 
-// mp3FrameBytes builds a valid MPEG-1 Layer III frame header for the given
-// bitrate (kbps) and sample rate (Hz), followed by a few bytes of fake frame
-// payload so probeMP3 has something to scan.
 func mp3FrameBytes(bitrate, sampleRate int) []byte {
 	var bitrateIdx int
 	for i, v := range []int{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320} {
@@ -305,13 +297,13 @@ func mp3FrameBytes(bitrate, sampleRate int) []byte {
 	case 32000:
 		sampleRateIdx = 2
 	default:
-		sampleRateIdx = 0 // 44100
+		sampleRateIdx = 0
 	}
 
-	h := uint32(0xFFE00000) // sync
-	h |= 3 << 19            // MPEG-1
-	h |= 1 << 17            // Layer III
-	h |= 1 << 16            // protection bit (no CRC)
+	h := uint32(0xFFE00000)
+	h |= 3 << 19
+	h |= 1 << 17
+	h |= 1 << 16
 	h |= uint32(bitrateIdx) << 12
 	h |= uint32(sampleRateIdx) << 10
 
@@ -334,7 +326,6 @@ func TestProbeMP3(t *testing.T) {
 }
 
 func TestProbeMP3SkipsID3v2(t *testing.T) {
-	// 10-byte ID3v2 header + 20-byte tag body, then the MP3 frame.
 	tag := []byte{'I', 'D', '3', 0x03, 0x00, 0x00, 0, 0, 0, 20}
 	tag = append(tag, make([]byte, 20)...)
 	data := append(tag, mp3FrameBytes(128, 44100)...)
@@ -354,15 +345,14 @@ func TestProbeMP3RejectsGarbage(t *testing.T) {
 	}
 }
 
-// wavHeaderBytes builds a minimal RIFF/WAVE header with a PCM fmt chunk.
 func wavHeaderBytes(sampleRate, channels, bitsPerSample int) []byte {
 	b := make([]byte, 44)
 	copy(b[0:4], "RIFF")
 	binary.LittleEndian.PutUint32(b[4:8], 36)
 	copy(b[8:12], "WAVE")
 	copy(b[12:16], "fmt ")
-	binary.LittleEndian.PutUint32(b[16:20], 16) // fmt chunk size
-	binary.LittleEndian.PutUint16(b[20:22], 1)  // PCM
+	binary.LittleEndian.PutUint32(b[16:20], 16)
+	binary.LittleEndian.PutUint16(b[20:22], 1)
 	binary.LittleEndian.PutUint16(b[22:24], uint16(channels))
 	binary.LittleEndian.PutUint32(b[24:28], uint32(sampleRate))
 	binary.LittleEndian.PutUint32(b[28:32], uint32(sampleRate*channels*bitsPerSample/8))
@@ -373,9 +363,8 @@ func wavHeaderBytes(sampleRate, channels, bitsPerSample int) []byte {
 	return b
 }
 
-// flacStreamInfoBytes builds a "fLaC" magic + STREAMINFO metadata block.
 func flacStreamInfoBytes(sampleRate int, totalSamples int64) []byte {
-	b := []byte{'f', 'L', 'a', 'C', 0x00, 0x00, 0x00, 0x22} // type 0, 34-byte block
+	b := []byte{'f', 'L', 'a', 'C', 0x00, 0x00, 0x00, 0x22}
 	st := make([]byte, 34)
 	st[10] = byte(sampleRate >> 12)
 	st[11] = byte(sampleRate >> 4)

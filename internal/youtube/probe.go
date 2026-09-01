@@ -8,25 +8,14 @@ import (
 	"strings"
 )
 
-// probeResult holds the real media properties extracted from the produced
-// download file. A zero BitrateKbps means the bitrate could not be determined.
 type probeResult struct {
 	BitrateKbps int
 	Codec       string
 	SizeBytes   int64
 }
 
-// probeMaxBytes limits how much of the download we read to detect an MPEG
-// audio frame header. A leading ID3v2 tag plus the first frames is far below
-// this limit.
-const probeMaxBytes = 512 << 10 // 512 KiB
+const probeMaxBytes = 512 << 10
 
-// probe inspects the produced file without depending on ffprobe being
-// installed. MP3 (MPEG audio frame header), WAV (PCM fmt chunk) and FLAC
-// (STREAMINFO + file size) are parsed directly; other containers fall back to
-// HTTP metadata (Content-Length and Content-Type). Probing is best-effort: on
-// any failure the zero value is returned and the caller falls back to the
-// worker's reported selection.
 func (s *Service) probe(ctx context.Context, downloadURL, expectedFormat string) probeResult {
 	res := probeResult{Codec: expectedFormat}
 
@@ -58,8 +47,6 @@ func (s *Service) probe(ctx context.Context, downloadURL, expectedFormat string)
 	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
 	res.Codec = codecFromContentType(contentType, expectedFormat)
 
-	// MP3, WAV and FLAC can be probed without ffprobe. Other containers keep
-	// only the Content-Length / Content-Type metadata gathered above.
 	switch {
 	case expectedFormat == "mp3" || strings.Contains(contentType, "mpeg"):
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, probeMaxBytes))
@@ -83,8 +70,6 @@ func (s *Service) probe(ctx context.Context, downloadURL, expectedFormat string)
 	return res
 }
 
-// probeMP3 scans data for the first valid MPEG audio frame header and returns
-// its bitrate (kbps) and sample rate (Hz). A leading ID3v2 tag is skipped.
 func probeMP3(data []byte) (bitrate, sampleRate int, ok bool) {
 	i := id3v2Size(data)
 	for i+4 <= len(data) {
@@ -99,8 +84,6 @@ func probeMP3(data []byte) (bitrate, sampleRate int, ok bool) {
 	return 0, 0, false
 }
 
-// id3v2Size returns the byte offset just past an ID3v2 tag at the start of
-// data, or 0 when no tag is present.
 func id3v2Size(data []byte) int {
 	if len(data) < 10 || string(data[0:3]) != "ID3" {
 		return 0
@@ -109,47 +92,44 @@ func id3v2Size(data []byte) int {
 	return 10 + size
 }
 
-// parseMPEGHeader decodes a 32-bit MPEG audio frame header into bitrate and
-// sample rate. It returns ok=false for reserved/invalid combinations so a
-// random 0xFF sync byte does not produce a false positive.
 func parseMPEGHeader(h uint32) (bitrate, sampleRate int, ok bool) {
-	if h&0xFFE00000 != 0xFFE00000 { // 11-bit sync word
+	if h&0xFFE00000 != 0xFFE00000 {
 		return 0, 0, false
 	}
 
-	version := (h >> 19) & 0x3 // 0=MPEG 2.5, 2=MPEG 2, 3=MPEG 1
-	layer := (h >> 17) & 0x3   // 1=Layer III, 2=Layer II, 3=Layer I
+	version := (h >> 19) & 0x3
+	layer := (h >> 17) & 0x3
 	bitrateIdx := (h >> 12) & 0xF
 	sampleRateIdx := (h >> 10) & 0x3
 
-	if version == 0x1 || layer == 0x0 { // reserved
+	if version == 0x1 || layer == 0x0 {
 		return 0, 0, false
 	}
-	if bitrateIdx == 0 || bitrateIdx == 0xF { // free or invalid
+	if bitrateIdx == 0 || bitrateIdx == 0xF {
 		return 0, 0, false
 	}
-	if sampleRateIdx == 0x3 { // reserved
+	if sampleRateIdx == 0x3 {
 		return 0, 0, false
 	}
 
 	var bitrates []int
 	switch version {
-	case 0x3: // MPEG 1
+	case 0x3:
 		switch layer {
-		case 0x3: // Layer I
+		case 0x3:
 			bitrates = []int{0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448}
-		case 0x2: // Layer II
+		case 0x2:
 			bitrates = []int{0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384}
-		case 0x1: // Layer III
+		case 0x1:
 			bitrates = []int{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320}
 		}
-	default: // MPEG 2 or 2.5
+	default:
 		switch layer {
-		case 0x3: // Layer I
+		case 0x3:
 			bitrates = []int{0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256}
-		case 0x2: // Layer II
+		case 0x2:
 			bitrates = []int{0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160}
-		case 0x1: // Layer III
+		case 0x1:
 			bitrates = []int{0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160}
 		}
 	}
@@ -160,11 +140,11 @@ func parseMPEGHeader(h uint32) (bitrate, sampleRate int, ok bool) {
 
 	var rates []int
 	switch version {
-	case 0x3: // MPEG 1
+	case 0x3:
 		rates = []int{44100, 48000, 32000}
-	case 0x2: // MPEG 2
+	case 0x2:
 		rates = []int{22050, 24000, 16000}
-	case 0x0: // MPEG 2.5
+	case 0x0:
 		rates = []int{11025, 12000, 8000}
 	}
 	sampleRate = rates[sampleRateIdx]
@@ -172,9 +152,6 @@ func parseMPEGHeader(h uint32) (bitrate, sampleRate int, ok bool) {
 	return bitrate, sampleRate, true
 }
 
-// probeWAV parses the RIFF/WAVE "fmt " chunk and derives the PCM bitrate from
-// sample rate, channel count and bits per sample (e.g. 44.1 kHz stereo 16-bit
-// → 1411 kbps). PCM (format 1) and IEEE float (format 3) streams are accepted.
 func probeWAV(data []byte) (int, bool) {
 	if len(data) < 12 || string(data[0:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
 		return 0, false
@@ -202,22 +179,17 @@ func probeWAV(data []byte) (int, bool) {
 
 		off = body + chunkSize
 		if chunkSize%2 == 1 {
-			off++ // chunks are word-aligned
+			off++
 		}
 	}
 	return 0, false
 }
 
-// probeFLAC parses the FLAC STREAMINFO metadata block to obtain the total
-// sample count and sample rate, then derives the average compressed bitrate
-// from the full file size (Content-Length). A streaming response without a
-// known Content-Length returns ok=false.
 func probeFLAC(data []byte, fileSize int64) (int, bool) {
 	if fileSize <= 0 || len(data) < 42 || string(data[0:4]) != "fLaC" {
 		return 0, false
 	}
 
-	// The first metadata block is always STREAMINFO (type 0).
 	blockType := data[4] & 0x7F
 	blockLen := int(data[5])<<16 | int(data[6])<<8 | int(data[7])
 	if blockType != 0 || blockLen < 34 || 8+34 > len(data) {
