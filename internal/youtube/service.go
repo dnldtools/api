@@ -644,8 +644,13 @@ func (s *Service) applyQuality(ctx context.Context, res *ConvertResult, requeste
 	actualBitrate := probe.BitrateKbps
 
 	switch {
-	case requested.Type == "audio" && probe.BitrateKbps > 0:
+	case probe.BitrateKbps > 0 && requested.Format == "mp3":
+		// MP3 quality is expressed as its encoded bitrate, so reflect the
+		// probed value in the quality string.
 		actualQuality = kbpsString(probe.BitrateKbps)
+	case probe.BitrateKbps > 0:
+		// WAV/FLAC: the probed bitrate is informational only; these formats
+		// carry no bitrate-based quality, so quality stays as requested.
 	case job.SelectedQuality != "":
 		actualQuality = job.SelectedQuality
 		if requested.Type == "audio" {

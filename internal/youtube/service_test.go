@@ -354,6 +354,72 @@ func TestProbeMP3RejectsGarbage(t *testing.T) {
 	}
 }
 
+// wavHeaderBytes builds a minimal RIFF/WAVE header with a PCM fmt chunk.
+func wavHeaderBytes(sampleRate, channels, bitsPerSample int) []byte {
+	b := make([]byte, 44)
+	copy(b[0:4], "RIFF")
+	binary.LittleEndian.PutUint32(b[4:8], 36)
+	copy(b[8:12], "WAVE")
+	copy(b[12:16], "fmt ")
+	binary.LittleEndian.PutUint32(b[16:20], 16) // fmt chunk size
+	binary.LittleEndian.PutUint16(b[20:22], 1)  // PCM
+	binary.LittleEndian.PutUint16(b[22:24], uint16(channels))
+	binary.LittleEndian.PutUint32(b[24:28], uint32(sampleRate))
+	binary.LittleEndian.PutUint32(b[28:32], uint32(sampleRate*channels*bitsPerSample/8))
+	binary.LittleEndian.PutUint16(b[32:34], uint16(channels*bitsPerSample/8))
+	binary.LittleEndian.PutUint16(b[34:36], uint16(bitsPerSample))
+	copy(b[36:40], "data")
+	binary.LittleEndian.PutUint32(b[40:44], 0)
+	return b
+}
+
+// flacStreamInfoBytes builds a "fLaC" magic + STREAMINFO metadata block.
+func flacStreamInfoBytes(sampleRate int, totalSamples int64) []byte {
+	b := []byte{'f', 'L', 'a', 'C', 0x00, 0x00, 0x00, 0x22} // type 0, 34-byte block
+	st := make([]byte, 34)
+	st[10] = byte(sampleRate >> 12)
+	st[11] = byte(sampleRate >> 4)
+	st[12] = byte(sampleRate<<4) & 0xF0
+	st[13] = byte(totalSamples>>32) & 0x0F
+	st[14] = byte(totalSamples >> 24)
+	st[15] = byte(totalSamples >> 16)
+	st[16] = byte(totalSamples >> 8)
+	st[17] = byte(totalSamples)
+	return append(b, st...)
+}
+
+func TestProbeWAV(t *testing.T) {
+	bitrate, ok := probeWAV(wavHeaderBytes(44100, 2, 16))
+	if !ok {
+		t.Fatal("probeWAV did not find the fmt chunk")
+	}
+	if bitrate != 1411 {
+		t.Errorf("bitrate = %d, want 1411", bitrate)
+	}
+}
+
+func TestProbeWAVRejectsGarbage(t *testing.T) {
+	if _, ok := probeWAV([]byte("not a wav file")); ok {
+		t.Error("probeWAV should reject non-RIFF data")
+	}
+}
+
+func TestProbeFLAC(t *testing.T) {
+	bitrate, ok := probeFLAC(flacStreamInfoBytes(44100, 44100), 100000)
+	if !ok {
+		t.Fatal("probeFLAC did not parse STREAMINFO")
+	}
+	if bitrate != 800 {
+		t.Errorf("bitrate = %d, want 800", bitrate)
+	}
+}
+
+func TestProbeFLACRejectsGarbage(t *testing.T) {
+	if _, ok := probeFLAC([]byte("not flac"), 1000); ok {
+		t.Error("probeFLAC should reject non-FLAC data")
+	}
+}
+
 func TestParseKbps(t *testing.T) {
 	tests := []struct {
 		in  string
@@ -454,5 +520,32 @@ func TestApplyQualityFallsBackToWorkerSelection(t *testing.T) {
 	}
 	if !res.QualityChanged {
 		t.Error("quality_changed = false, want true")
+	}
+}
+
+func TestApplyQualityWAVReportsBitrate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/wav")
+		_, _ = w.Write(wavHeaderBytes(44100, 2, 16))
+	}))
+	defer server.Close()
+
+	svc := NewWithConfig(Config{HTTPClient: server.Client(), RequestTimeout: time.Second})
+	res := &ConvertResult{DownloadURL: server.URL + "/file.wav"}
+	requested := Format{ID: "wav", Type: "audio", Format: "wav"}
+
+	svc.applyQuality(context.Background(), res, requested, completedJob{})
+
+	if res.Output.BitrateKbps != 1411 {
+		t.Errorf("output.bitrate_kbps = %d, want 1411", res.Output.BitrateKbps)
+	}
+	if res.Output.Quality != "" {
+		t.Errorf("output.quality = %q, want empty (WAV has no bitrate quality)", res.Output.Quality)
+	}
+	if res.Output.ID != "wav" {
+		t.Errorf("output.id = %q, want wav", res.Output.ID)
+	}
+	if res.QualityChanged {
+		t.Error("quality_changed = true, want false for WAV")
 	}
 }

@@ -22,10 +22,11 @@ type probeResult struct {
 const probeMaxBytes = 512 << 10 // 512 KiB
 
 // probe inspects the produced file without depending on ffprobe being
-// installed. For MP3 outputs it parses the MPEG audio frame header directly;
-// for other containers it falls back to HTTP metadata (Content-Length and
-// Content-Type). Probing is best-effort: on any failure the zero value is
-// returned and the caller falls back to the worker's reported selection.
+// installed. MP3 (MPEG audio frame header), WAV (PCM fmt chunk) and FLAC
+// (STREAMINFO + file size) are parsed directly; other containers fall back to
+// HTTP metadata (Content-Length and Content-Type). Probing is best-effort: on
+// any failure the zero value is returned and the caller falls back to the
+// worker's reported selection.
 func (s *Service) probe(ctx context.Context, downloadURL, expectedFormat string) probeResult {
 	res := probeResult{Codec: expectedFormat}
 
@@ -57,13 +58,26 @@ func (s *Service) probe(ctx context.Context, downloadURL, expectedFormat string)
 	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
 	res.Codec = codecFromContentType(contentType, expectedFormat)
 
-	// Only MP3 can be probed without ffprobe; skip the body for other
-	// containers (we still have Content-Length / Content-Type above).
-	if expectedFormat == "mp3" || strings.Contains(contentType, "mpeg") {
+	// MP3, WAV and FLAC can be probed without ffprobe. Other containers keep
+	// only the Content-Length / Content-Type metadata gathered above.
+	switch {
+	case expectedFormat == "mp3" || strings.Contains(contentType, "mpeg"):
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, probeMaxBytes))
 		if bitrate, _, ok := probeMP3(data); ok {
 			res.BitrateKbps = bitrate
 			res.Codec = "mp3"
+		}
+	case expectedFormat == "wav" || strings.Contains(contentType, "wav"):
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, probeMaxBytes))
+		if bitrate, ok := probeWAV(data); ok {
+			res.BitrateKbps = bitrate
+			res.Codec = "wav"
+		}
+	case expectedFormat == "flac" || strings.Contains(contentType, "flac"):
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, probeMaxBytes))
+		if bitrate, ok := probeFLAC(data, res.SizeBytes); ok {
+			res.BitrateKbps = bitrate
+			res.Codec = "flac"
 		}
 	}
 	return res
@@ -156,6 +170,76 @@ func parseMPEGHeader(h uint32) (bitrate, sampleRate int, ok bool) {
 	sampleRate = rates[sampleRateIdx]
 
 	return bitrate, sampleRate, true
+}
+
+// probeWAV parses the RIFF/WAVE "fmt " chunk and derives the PCM bitrate from
+// sample rate, channel count and bits per sample (e.g. 44.1 kHz stereo 16-bit
+// → 1411 kbps). PCM (format 1) and IEEE float (format 3) streams are accepted.
+func probeWAV(data []byte) (int, bool) {
+	if len(data) < 12 || string(data[0:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
+		return 0, false
+	}
+
+	off := 12
+	for off+8 <= len(data) {
+		chunkID := string(data[off : off+4])
+		chunkSize := int(binary.LittleEndian.Uint32(data[off+4 : off+8]))
+		body := off + 8
+		if body+chunkSize > len(data) {
+			return 0, false
+		}
+
+		if chunkID == "fmt " && chunkSize >= 16 {
+			audioFormat := binary.LittleEndian.Uint16(data[body : body+2])
+			channels := int(binary.LittleEndian.Uint16(data[body+2 : body+4]))
+			sampleRate := int(binary.LittleEndian.Uint32(data[body+4 : body+8]))
+			bitsPerSample := int(binary.LittleEndian.Uint16(data[body+14 : body+16]))
+			if (audioFormat == 1 || audioFormat == 3) && sampleRate > 0 && channels > 0 && bitsPerSample > 0 {
+				return sampleRate * channels * bitsPerSample / 1000, true
+			}
+			return 0, false
+		}
+
+		off = body + chunkSize
+		if chunkSize%2 == 1 {
+			off++ // chunks are word-aligned
+		}
+	}
+	return 0, false
+}
+
+// probeFLAC parses the FLAC STREAMINFO metadata block to obtain the total
+// sample count and sample rate, then derives the average compressed bitrate
+// from the full file size (Content-Length). A streaming response without a
+// known Content-Length returns ok=false.
+func probeFLAC(data []byte, fileSize int64) (int, bool) {
+	if fileSize <= 0 || len(data) < 42 || string(data[0:4]) != "fLaC" {
+		return 0, false
+	}
+
+	// The first metadata block is always STREAMINFO (type 0).
+	blockType := data[4] & 0x7F
+	blockLen := int(data[5])<<16 | int(data[6])<<8 | int(data[7])
+	if blockType != 0 || blockLen < 34 || 8+34 > len(data) {
+		return 0, false
+	}
+
+	st := data[8:42]
+	sampleRate := int(st[10])<<12 | int(st[11])<<4 | int(st[12])>>4
+	totalSamples := int64(st[13]&0x0F)<<32 | int64(st[14])<<24 | int64(st[15])<<16 | int64(st[16])<<8 | int64(st[17])
+	if sampleRate <= 0 || totalSamples <= 0 {
+		return 0, false
+	}
+
+	durationSec := float64(totalSamples) / float64(sampleRate)
+	if durationSec <= 0 {
+		return 0, false
+	}
+	kbps := int(float64(fileSize) * 8 / durationSec / 1000)
+	if kbps <= 0 {
+		return 0, false
+	}
+	return kbps, true
 }
 
 func codecFromContentType(contentType, fallback string) string {
