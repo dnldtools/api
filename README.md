@@ -1,14 +1,16 @@
 # rest-api
 
 REST API untuk mengunduh media dari berbagai platform (saat ini Facebook,
-Instagram, TikTok, Shopee, dan YouTube; platform lain menyusul).
+Instagram, TikTok, Shopee, 9xbuddy, SaveFrom, dan YouTube; platform lain
+menyusul).
 
 > **Status:** Facebook sudah terimplementasi (via fget.io), Instagram
 > (official API relay + snapinsta fallback), TikTok (snaptik
 > fallback utama + official rehydration relay), Shopee (official
-> watermark + shopeenowatermark lewat proxy), dan YouTube (search + format
-> catalog + konversi via convert1s). Platform lain ditambahkan sesuai scraper
-> yang dikirim kemudian.
+> watermark + shopeenowatermark lewat proxy), 9xbuddy (all-in-one scraper
+> fallback via 9xbuddy.site), SaveFrom (scraper via worker savefrom.net),
+> dan YouTube (search + format catalog + konversi via convert1s). Platform lain
+> ditambahkan sesuai scraper yang dikirim kemudian.
 
 ---
 
@@ -67,7 +69,7 @@ rest-api/
 │   ├── ratelimit/           # Rate limiter jendela-pendek (Redis + in-memory)
 │   ├── quota/               # Kuota harian/bulanan (Postgres source of truth)
 │   ├── downloader/          # Domain + engine (types, Provider/Resolver interface, Registry, Service)
-│   │   └── providers/       # Adapter platform (facebook, instagram, tiktok, shopee)
+│   │   └── providers/       # Adapter platform (facebook, instagram, tiktok, shopee, ninexbuddy)
 │   ├── youtube/             # Layanan YouTube (search, formats, convert) via convert1s
 │   ├── browser/             # Abstraksi browser automation + adapter Playwright
 │   ├── database/            # PostgreSQL: connection pool + migration runner
@@ -138,7 +140,7 @@ curl "http://localhost:8080/v1/youtube/search?q=lofi" \
 | PATCH  | `/v1/admin/keys/{id}` | implemented | `X-API-Key` + role `admin` | Ubah key (name/status)  |
 | DELETE | `/v1/admin/keys/{id}` | implemented | `X-API-Key` + role `admin` | Cabut key (revoke)      |
 | GET    | `/v1/admin/stats`     | implemented | `X-API-Key` + role `admin` | Statistik platform      |
-| POST   | `/v1/downloads`       | skeleton    | `X-API-Key` wajib   | Resolve/download media (Facebook via fget.io, Instagram official + snapinsta, TikTok snaptik + official, Shopee official + shopeenowatermark) |
+| POST   | `/v1/downloads`       | skeleton    | `X-API-Key` wajib   | Resolve/download media (Facebook via fget.io, Instagram official + snapinsta, TikTok snaptik + official, Shopee official + shopeenowatermark, 9xbuddy all-in-one fallback, SaveFrom via worker savefrom.net) |
 | GET    | `/v1/youtube/search`  | implemented | `X-API-Key` wajib   | Cari video YouTube (param `q`)         |
 | GET    | `/v1/youtube/formats` | implemented | `X-API-Key` wajib   | Katalog format konversi YouTube        |
 | POST   | `/v1/youtube/convert` | implemented | `X-API-Key` wajib   | Konversi/download video YouTube (kuota) |

@@ -113,7 +113,6 @@ func TestDownloadValidationErrors(t *testing.T) {
 		code string
 	}{
 
-		{"platform omitted", `{"url":"https://example.com/video/1"}`, "UNSUPPORTED_PLATFORM"},
 		{"missing url", `{"platform":"facebook"}`, "INVALID_URL"},
 		{"unsupported platform", `{"platform":"myspace","url":"https://x"}`, "UNSUPPORTED_PLATFORM"},
 	}

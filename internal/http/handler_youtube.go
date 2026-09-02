@@ -21,7 +21,9 @@ func handleYouTubeSearch(svc *youtube.Service, errHandler *ErrorHandler) http.Ha
 			return
 		}
 
-		result, err := svc.Search(r.Context(), q)
+		pageToken := strings.TrimSpace(r.URL.Query().Get("page_token"))
+
+		result, err := svc.Search(r.Context(), q, pageToken)
 		if err != nil {
 			errHandler.Handle(w, r, err)
 			return

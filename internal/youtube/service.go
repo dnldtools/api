@@ -90,13 +90,16 @@ func NewWithConfig(cfg Config) *Service {
 
 func (s *Service) Formats() Catalog { return Formats() }
 
-func (s *Service) Search(ctx context.Context, query string) (*SearchResult, error) {
+func (s *Service) Search(ctx context.Context, query, pageToken string) (*SearchResult, error) {
 	q := strings.TrimSpace(query)
 	if q == "" {
 		return nil, ErrQueryRequired
 	}
 
 	target := strings.TrimSuffix(s.cfg.Meta, "/") + "/search?q=" + url.QueryEscape(q)
+	if pageToken != "" {
+		target += "&pageToken=" + url.QueryEscape(pageToken)
+	}
 	data, status, err := s.do(ctx, http.MethodGet, target, nil, nil)
 	if err != nil {
 		return nil, err

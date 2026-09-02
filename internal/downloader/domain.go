@@ -9,6 +9,8 @@ const (
 	PlatformInstagram Platform = "instagram"
 	PlatformTikTok    Platform = "tiktok"
 	PlatformShopee    Platform = "shopee"
+	Platform9xbuddy   Platform = "9xbuddy"
+	PlatformSavefrom  Platform = "savefrom"
 )
 
 type MediaType string
