@@ -73,6 +73,15 @@ func NewRouter(deps Dependencies) http.Handler {
 	)
 	mux.Handle("POST /v1/downloads", protected)
 
+	downloadProxyHandler := handleDownloadProxy(deps.Downloader, errHandler)
+	downloadProxy := chain(
+		downloadProxyHandler,
+		authMiddleware(deps.Auth, errHandler),
+		rateLimitMiddleware(deps.RateLimiter, deps.Plans, errHandler),
+		quotaMiddleware(deps.Quota, errHandler),
+	)
+	mux.Handle("GET /v1/downloads/proxy", downloadProxy)
+
 	youtubeConvertHandler := handleYouTubeConvert(deps.Youtube, errHandler)
 	youtubeConvert := chain(
 		youtubeConvertHandler,

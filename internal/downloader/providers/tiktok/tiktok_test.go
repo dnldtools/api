@@ -5,8 +5,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	stderrors "errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -491,4 +493,75 @@ func fakeJWT(payload string) string {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`))
 	body := base64.RawURLEncoding.EncodeToString([]byte(payload))
 	return header + "." + body + ".sig"
+}
+
+func TestStreamMediaRejectsDisallowedHosts(t *testing.T) {
+	p := NewWithConfig(DefaultConfig())
+
+	allowed := []string{
+		"https://v16m.tiktokcdn-us.com/video.mp4",
+		"https://v16.tokcdn.com/video.mp4",
+		"https://p16-common-sign.tiktokcdn-us.com/x.jpg",
+		"https://snapcdn.app/v.mp4",
+		"https://tik-cdn.com/v.mp4",
+		"https://www.tiktok.com/api/v1/video/redirect/",
+		"https://sf16-muse-va.ibytedtos.com/v.mp4",
+	}
+	for _, u := range allowed {
+		if !p.allowedMediaHost(u) {
+			t.Errorf("allowedMediaHost(%q) = false, want true", u)
+		}
+	}
+
+	rejected := []string{
+		"https://evil.com/v.mp4",
+		"https://tiktokcdn.com.evil.com/v.mp4",
+		"https://eviltiktokcdn.com/v.mp4",
+		"ftp://v16.tokcdn.com/v.mp4",
+		"",
+		"not-a-url",
+	}
+	for _, u := range rejected {
+		if p.allowedMediaHost(u) {
+			t.Errorf("allowedMediaHost(%q) = true, want false", u)
+		}
+	}
+}
+
+func TestStreamMediaSendsHeadersAndStreamsBody(t *testing.T) {
+	var gotUA, gotReferer, gotOrigin string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+		gotReferer = r.Header.Get("Referer")
+		gotOrigin = r.Header.Get("Origin")
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write([]byte("streamed-bytes"))
+	}))
+	defer srv.Close()
+
+	u, _ := url.Parse(srv.URL)
+	p := NewWithConfig(Config{AllowedMediaHosts: []string{u.Hostname()}})
+
+	stream, err := p.StreamMedia(context.Background(), srv.URL+"/media.mp4")
+	if err != nil {
+		t.Fatalf("StreamMedia() error = %v", err)
+	}
+	defer stream.Body.Close()
+
+	if gotUA != officialUserAgent {
+		t.Errorf("User-Agent = %q, want %q", gotUA, officialUserAgent)
+	}
+	if gotReferer != "https://www.tiktok.com/" {
+		t.Errorf("Referer = %q, want https://www.tiktok.com/", gotReferer)
+	}
+	if gotOrigin != "https://www.tiktok.com" {
+		t.Errorf("Origin = %q, want https://www.tiktok.com", gotOrigin)
+	}
+	if stream.ContentType != "video/mp4" {
+		t.Errorf("ContentType = %q, want video/mp4", stream.ContentType)
+	}
+	body, _ := io.ReadAll(stream.Body)
+	if string(body) != "streamed-bytes" {
+		t.Errorf("body = %q, want streamed-bytes", string(body))
+	}
 }

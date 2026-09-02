@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -116,6 +117,57 @@ func TestDownloadTikTokUpstreamUnavailableThroughHandler(t *testing.T) {
 	}
 	if got := errCode(t, rec.Body.Bytes()); got != "PROVIDER_UNAVAILABLE" {
 		t.Errorf("error.code = %q, want PROVIDER_UNAVAILABLE", got)
+	}
+}
+
+func TestDownloadProxyStreamsMedia(t *testing.T) {
+	var gotReferer, gotOrigin string
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "media") {
+			gotReferer = r.Header.Get("Referer")
+			gotOrigin = r.Header.Get("Origin")
+			w.Header().Set("Content-Type", "video/mp4")
+			w.Header().Set("Content-Length", "4")
+			_, _ = w.Write([]byte("DATA"))
+			return
+		}
+		_, _ = w.Write([]byte(tiktokRehydrationHTML("Reel", "alice", "https://cdn.example.com/t.jpg", "http://"+r.Host+"/media.mp4")))
+	}))
+	defer relay.Close()
+
+	u, _ := url.Parse(relay.URL)
+	registry := downloader.NewRegistry()
+	if err := registry.Register(tiktok.NewWithConfig(tiktok.Config{
+		RelayBaseURL:      relay.URL,
+		OfficialBaseURL:   relay.URL,
+		AllowedMediaHosts: []string{u.Hostname()},
+	})); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	router := newRouterWithService(t, downloader.NewService(registry))
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/downloads/proxy?url="+url.QueryEscape("https://www.tiktok.com/@alice/video/1234567890")+"&type=video", nil)
+	req.Header.Set("X-API-Key", testAPIKey)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "video/mp4" {
+		t.Errorf("Content-Type = %q, want video/mp4", ct)
+	}
+	if cd := rec.Header().Get("Content-Disposition"); !strings.Contains(cd, "attachment") {
+		t.Errorf("Content-Disposition = %q, want attachment", cd)
+	}
+	if rec.Body.String() != "DATA" {
+		t.Errorf("body = %q, want DATA", rec.Body.String())
+	}
+	if gotReferer != "https://www.tiktok.com/" {
+		t.Errorf("upstream Referer = %q, want https://www.tiktok.com/", gotReferer)
+	}
+	if gotOrigin != "https://www.tiktok.com" {
+		t.Errorf("upstream Origin = %q, want https://www.tiktok.com", gotOrigin)
 	}
 }
 

@@ -16,4 +16,6 @@ var (
 	ErrProviderInvalidResponse = errors.New("provider returned an invalid response")
 
 	ErrMediaNotFound = errors.New("media not found")
+
+	ErrStreamUnsupported = errors.New("streaming is not supported for this platform")
 )

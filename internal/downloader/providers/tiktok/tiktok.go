@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"regexp"
 	"strings"
@@ -41,6 +42,11 @@ type Config struct {
 	// tiktok short links (intended for tests).
 	ResolveBaseURL string
 
+	// AllowedMediaHosts are additional host suffixes (or exact hosts) that
+	// StreamMedia is allowed to fetch from, on top of the built-in TikTok CDN
+	// allowlist (intended for tests).
+	AllowedMediaHosts []string
+
 	SnaptikAPIURL string
 
 	Timeout time.Duration
@@ -66,6 +72,7 @@ type Provider struct {
 	resolveBase  string
 	snaptikAPI   string
 	userAgent    string
+	allowedHosts []string
 	client       *http.Client
 }
 
@@ -95,7 +102,8 @@ func NewWithConfig(cfg Config) *Provider {
 	}
 	client := cfg.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: cfg.Timeout}
+		jar, _ := cookiejar.New(nil)
+		client = &http.Client{Timeout: cfg.Timeout, Jar: jar}
 	}
 	return &Provider{
 		relay:        strings.TrimRight(cfg.RelayBaseURL, "/"),
@@ -103,6 +111,7 @@ func NewWithConfig(cfg Config) *Provider {
 		resolveBase:  strings.TrimRight(cfg.ResolveBaseURL, "/"),
 		snaptikAPI:   cfg.SnaptikAPIURL,
 		userAgent:    cfg.UserAgent,
+		allowedHosts: cfg.AllowedMediaHosts,
 		client:       client,
 	}
 }
@@ -489,6 +498,44 @@ func (p *Provider) do(ctx context.Context, method, target string, headers map[st
 	return string(data), finalURL, resp.StatusCode, nil
 }
 
+// StreamMedia fetches a resolved media URL server-side using this provider's
+// client. Cookies captured while resolving the page (e.g. tt_chain_token) live
+// in the client's cookie jar and are attached automatically, and the referer/origin
+// headers TikTok's CDN expects are set here so downstream clients never need them.
+func (p *Provider) StreamMedia(ctx context.Context, mediaURL string) (*downloader.MediaStream, error) {
+	if !p.allowedMediaHost(mediaURL) {
+		return nil, downloader.ErrInvalidURL
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mediaURL, nil)
+	if err != nil {
+		return nil, stderrors.Join(downloader.ErrProviderUnavailable, err)
+	}
+	req.Header.Set("user-agent", officialUserAgent)
+	req.Header.Set("accept", "*/*")
+	req.Header.Set("referer", "https://www.tiktok.com/")
+	req.Header.Set("origin", "https://www.tiktok.com")
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, classifyClientError(err)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		resp.Body.Close()
+		return nil, classifyHTTPStatus(resp.StatusCode)
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	return &downloader.MediaStream{
+		Body:        resp.Body,
+		ContentType: contentType,
+		Length:      resp.ContentLength,
+	}, nil
+}
+
 func classifyClientError(err error) error {
 	switch {
 	case stderrors.Is(err, context.Canceled):
@@ -516,6 +563,55 @@ func viaRelay(relay, target string) string {
 
 func isShortLink(u string) bool {
 	return reShortLink.MatchString(u)
+}
+
+// mediaHostSuffixes are the only hosts StreamMedia will fetch from, guarding
+// against SSRF via a tampered media URL.
+var mediaHostSuffixes = []string{
+	"tiktok.com",
+	"tiktokcdn.com",
+	"tiktokcdn-us.com",
+	"tiktokcdn-eu.com",
+	"tokcdn.com",
+	"tiktokv.com",
+	"muscdn.com",
+	"douyin.com",
+	"iesdouyin.com",
+	"ibytedtos.com",
+	"byteimg.com",
+	"ibyteimg.com",
+	"snapcdn.app",
+	"tik-cdn.com",
+	"snaptik.net",
+}
+
+func (p *Provider) allowedMediaHost(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return false
+	}
+	for _, suffix := range mediaHostSuffixes {
+		if host == suffix || strings.HasSuffix(host, "."+suffix) {
+			return true
+		}
+	}
+	for _, suffix := range p.allowedHosts {
+		suffix = strings.ToLower(strings.TrimSpace(suffix))
+		if suffix == "" {
+			continue
+		}
+		if host == suffix || strings.HasSuffix(host, "."+suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func jwtURL(href string) string {

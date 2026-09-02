@@ -116,6 +116,11 @@ curl -X POST http://localhost:8080/v1/downloads \
 # Cari video YouTube (butuh API key)
 curl "http://localhost:8080/v1/youtube/search?q=lofi" \
      -H "X-API-Key: <raw key dari devkey>"
+
+# Streaming proxy TikTok (server yang ambil media, bukan klien langsung ke CDN)
+curl -o out.mp4 \
+     "http://localhost:8080/v1/downloads/proxy?url=https%3A%2F%2Fwww.tiktok.com%2F%40alice%2Fvideo%2F1234567890&type=video&index=0" \
+     -H "X-API-Key: <raw key dari devkey>"
 ```
 
 > Seluruh endpoint `/v1/...` mewajibkan `X-API-Key`. Tanpa key → 401, akun
@@ -141,6 +146,7 @@ curl "http://localhost:8080/v1/youtube/search?q=lofi" \
 | DELETE | `/v1/admin/keys/{id}` | implemented | `X-API-Key` + role `admin` | Cabut key (revoke)      |
 | GET    | `/v1/admin/stats`     | implemented | `X-API-Key` + role `admin` | Statistik platform      |
 | POST   | `/v1/downloads`       | skeleton    | `X-API-Key` wajib   | Resolve/download media (Facebook via fget.io, Instagram official + snapinsta, TikTok official (direct rehydration) + snaptik fallback, Shopee official + shopeenowatermark, 9xbuddy all-in-one fallback, SaveFrom via worker savefrom.net) |
+| GET    | `/v1/downloads/proxy` | implemented | `X-API-Key` wajib   | Streaming proxy: server yang ambil media (dengan cookie/header upstream) lalu stream byte-nya ke klien. Param: `url`, `type` (`video`/`audio`/`image`, default `video`), `index` (format ke-n, default `0`) |
 | GET    | `/v1/youtube/search`  | implemented | `X-API-Key` wajib   | Cari video YouTube (param `q`)         |
 | GET    | `/v1/youtube/formats` | implemented | `X-API-Key` wajib   | Katalog format konversi YouTube        |
 | POST   | `/v1/youtube/convert` | implemented | `X-API-Key` wajib   | Konversi/download video YouTube (kuota) |

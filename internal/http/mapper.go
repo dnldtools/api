@@ -33,6 +33,8 @@ func mapError(err error) *apperrors.AppError {
 		return apperrors.ProviderInvalidResponse("provider returned an invalid response").WithCause(err)
 	case stderrors.Is(err, downloader.ErrMediaNotFound):
 		return apperrors.MediaNotFound("media not found").WithCause(err)
+	case stderrors.Is(err, downloader.ErrStreamUnsupported):
+		return apperrors.NotImplemented(apperrors.CodeNotImplemented, "streaming is not supported for this platform").WithCause(err)
 
 	case stderrors.Is(err, youtube.ErrInvalidURL):
 		return apperrors.Validation(apperrors.CodeInvalidURL, "url is required").WithCause(err)

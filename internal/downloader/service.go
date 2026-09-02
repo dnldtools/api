@@ -72,4 +72,27 @@ func (s *Service) Resolve(ctx context.Context, req DownloadRequest) (*DownloadRe
 	return result, nil
 }
 
+// StreamMedia fetches a resolved media URL through the provider registered for
+// the given platform. The provider is responsible for attaching any session
+// state (cookies/headers) required by the upstream and for validating the URL
+// against its own allowlist to prevent SSRF.
+func (s *Service) StreamMedia(ctx context.Context, platform Platform, mediaURL string) (*MediaStream, error) {
+	provider, err := s.registry.Get(platform)
+	if err != nil {
+		return nil, err
+	}
+
+	if lc, ok := provider.(Lifecycle); ok {
+		if err := lc.Ready(); err != nil {
+			return nil, errors.Join(ErrProviderUnavailable, err)
+		}
+	}
+
+	streamer, ok := provider.(MediaStreamer)
+	if !ok {
+		return nil, ErrStreamUnsupported
+	}
+	return streamer.StreamMedia(ctx, mediaURL)
+}
+
 var _ Downloader = (*Service)(nil)
