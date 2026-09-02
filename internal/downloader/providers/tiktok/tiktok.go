@@ -37,6 +37,10 @@ type Config struct {
 	// rehydration fetch. Defaults to https://www.tiktok.com; intended for tests.
 	OfficialBaseURL string
 
+	// ResolveBaseURL, when set, is used instead of a direct fetch to resolve
+	// tiktok short links (intended for tests).
+	ResolveBaseURL string
+
 	SnaptikAPIURL string
 
 	Timeout time.Duration
@@ -59,6 +63,7 @@ func DefaultConfig() Config {
 type Provider struct {
 	relay        string
 	officialBase string
+	resolveBase  string
 	snaptikAPI   string
 	userAgent    string
 	client       *http.Client
@@ -95,6 +100,7 @@ func NewWithConfig(cfg Config) *Provider {
 	return &Provider{
 		relay:        strings.TrimRight(cfg.RelayBaseURL, "/"),
 		officialBase: strings.TrimRight(cfg.OfficialBaseURL, "/"),
+		resolveBase:  strings.TrimRight(cfg.ResolveBaseURL, "/"),
 		snaptikAPI:   cfg.SnaptikAPIURL,
 		userAgent:    cfg.UserAgent,
 		client:       client,
@@ -169,15 +175,32 @@ func (p *Provider) resolveTikTokURL(ctx context.Context, inputURL string) (strin
 		return u, nil
 	}
 
-	body, finalURL, status, err := p.do(ctx, http.MethodGet, viaRelay(p.relay, u), map[string]string{
-		"user-agent": p.userAgent,
-		"accept":     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+	target := u
+	if p.resolveBase != "" {
+		target = p.resolveBase + "/" + u
+	}
+
+	// Resolve the short link directly (follow redirects) so the redirect lands
+	// on the canonical tiktok.com URL carrying the numeric video/photo id.
+	body, finalURL, status, err := p.do(ctx, http.MethodGet, target, map[string]string{
+		"user-agent":      officialUserAgent,
+		"accept":          "text/html",
+		"accept-language": "en-US,en;q=0.9",
 	}, nil, resolveURLTimeout)
 	if err != nil {
 		return "", err
 	}
 	if status < http.StatusOK || status >= http.StatusMultipleChoices {
 		return "", classifyHTTPStatus(status)
+	}
+
+	// Prefer the redirected URL when it's a tiktok.com page with a numeric id.
+	if id := firstMatch(reVideoID, finalURL); id != "" && strings.Contains(finalURL, "tiktok.com") {
+		clean := finalURL
+		if i := strings.IndexByte(clean, '?'); i >= 0 {
+			clean = clean[:i]
+		}
+		return clean, nil
 	}
 
 	picked := html.UnescapeString(orStr(

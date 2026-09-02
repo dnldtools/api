@@ -239,7 +239,7 @@ func TestResolveShortLink(t *testing.T) {
 	}))
 	defer relay.Close()
 
-	p := NewWithConfig(Config{RelayBaseURL: relay.URL, OfficialBaseURL: relay.URL})
+	p := NewWithConfig(Config{RelayBaseURL: relay.URL, OfficialBaseURL: relay.URL, ResolveBaseURL: relay.URL})
 	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testShortURL})
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
@@ -264,7 +264,7 @@ func TestResolveShortLinkNonMediaPage(t *testing.T) {
 	}))
 	defer relay.Close()
 
-	p := NewWithConfig(Config{RelayBaseURL: relay.URL, OfficialBaseURL: relay.URL})
+	p := NewWithConfig(Config{RelayBaseURL: relay.URL, OfficialBaseURL: relay.URL, ResolveBaseURL: relay.URL})
 	_, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testShortURL})
 	if !stderrors.Is(err, downloader.ErrMediaNotFound) {
 		t.Fatalf("error = %v, want ErrMediaNotFound", err)
@@ -351,6 +351,22 @@ func TestResolveTimeout(t *testing.T) {
 	_, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testVideoURL})
 	if !stderrors.Is(err, downloader.ErrProviderTimeout) {
 		t.Fatalf("error = %v, want ErrProviderTimeout", err)
+	}
+}
+
+func TestOfficialPath(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"https://www.tiktok.com/@alice/video/1234567890?is_from_webapp=1", "/@alice/video/1234567890"},
+		{"https://www.tiktok.com/@alice/video/7123456789012345678", "/@alice/video/7123456789012345678"},
+		{"7123456789012345678", "/@i/video/7123456789012345678"},
+	}
+	for _, tc := range cases {
+		if got := officialPath(tc.in); got != tc.want {
+			t.Errorf("officialPath(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
 
