@@ -69,8 +69,102 @@ func TestDownloadTikTokProviderThroughHandler(t *testing.T) {
 	if len(envelope.Data.Formats) != 1 {
 		t.Fatalf("len(data.formats) = %d, want 1", len(envelope.Data.Formats))
 	}
-	if envelope.Data.Formats[0].URL != "https://cdn.example.com/v.mp4" {
-		t.Errorf("data.formats[0].url = %q, want https://cdn.example.com/v.mp4", envelope.Data.Formats[0].URL)
+	pu, err := url.Parse(envelope.Data.Formats[0].URL)
+	if err != nil {
+		t.Fatalf("parse format url: %v", err)
+	}
+	if pu.Scheme+"://"+pu.Host != "http://example.com" {
+		t.Errorf("format url base = %q, want http://example.com", pu.Scheme+"://"+pu.Host)
+	}
+	if pu.Path != "/v1/downloads/proxy" {
+		t.Errorf("format url path = %q, want /v1/downloads/proxy", pu.Path)
+	}
+	if got := pu.Query().Get("url"); got != "https://www.tiktok.com/@alice/video/1234567890" {
+		t.Errorf("format url url param = %q", got)
+	}
+	if got := pu.Query().Get("type"); got != "video" {
+		t.Errorf("format url type param = %q, want video", got)
+	}
+	if got := pu.Query().Get("index"); got != "0" {
+		t.Errorf("format url index param = %q, want 0", got)
+	}
+}
+
+func TestDownloadTikTokRewritesFormatsToProxyURLs(t *testing.T) {
+	item := map[string]interface{}{
+		"id":     "1234567890",
+		"desc":   "Slideshow",
+		"author": map[string]interface{}{"uniqueId": "alice"},
+		"video": map[string]interface{}{
+			"cover": "https://cdn.example.com/cover.jpg",
+			"bitrateInfo": []interface{}{
+				map[string]interface{}{
+					"PlayAddr": map[string]interface{}{"UrlList": []interface{}{"https://cdn.example.com/v.mp4"}},
+				},
+			},
+		},
+		"imagePost": map[string]interface{}{
+			"images": []interface{}{
+				map[string]interface{}{"imageURL": map[string]interface{}{"urlList": []interface{}{"https://cdn.example.com/1.jpg"}}},
+				map[string]interface{}{"imageURL": map[string]interface{}{"urlList": []interface{}{"https://cdn.example.com/2.jpg"}}},
+			},
+		},
+		"music": map[string]interface{}{"playUrl": "https://cdn.example.com/m.mp3"},
+	}
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(rehydrationPageHTML(item)))
+	}))
+	defer relay.Close()
+
+	router := newRouterWithService(t, registryWithTikTok(t, relay.URL))
+	rec := postDownload(t, router, testAPIKey, `{"platform":"tiktok","url":"https://www.tiktok.com/@alice/video/1234567890"}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var envelope struct {
+		Data struct {
+			Formats []struct {
+				Type string `json:"type"`
+				URL  string `json:"url"`
+			} `json:"formats"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	want := []struct{ typ, index string }{
+		{"video", "0"},
+		{"image", "0"},
+		{"image", "1"},
+		{"audio", "0"},
+	}
+	if len(envelope.Data.Formats) != len(want) {
+		t.Fatalf("len(data.formats) = %d, want %d", len(envelope.Data.Formats), len(want))
+	}
+	for i, w := range want {
+		f := envelope.Data.Formats[i]
+		if f.Type != w.typ {
+			t.Errorf("formats[%d].type = %q, want %q", i, f.Type, w.typ)
+		}
+		u, err := url.Parse(f.URL)
+		if err != nil {
+			t.Fatalf("formats[%d].url parse: %v", i, err)
+		}
+		if u.Path != "/v1/downloads/proxy" {
+			t.Errorf("formats[%d] path = %q, want /v1/downloads/proxy", i, u.Path)
+		}
+		if got := u.Query().Get("url"); got != "https://www.tiktok.com/@alice/video/1234567890" {
+			t.Errorf("formats[%d] url param = %q", i, got)
+		}
+		if got := u.Query().Get("type"); got != w.typ {
+			t.Errorf("formats[%d] type param = %q, want %q", i, got, w.typ)
+		}
+		if got := u.Query().Get("index"); got != w.index {
+			t.Errorf("formats[%d] index param = %q, want %q", i, got, w.index)
+		}
 	}
 }
 
@@ -172,27 +266,31 @@ func TestDownloadProxyStreamsMedia(t *testing.T) {
 }
 
 func tiktokRehydrationHTML(desc, author, cover, videoURL string) string {
-	item := map[string]interface{}{
+	return rehydrationPageHTML(map[string]interface{}{
+		"id":     "1234567890",
+		"desc":   desc,
+		"author": map[string]interface{}{"uniqueId": author},
+		"video": map[string]interface{}{
+			"cover": cover,
+			"bitrateInfo": []interface{}{
+				map[string]interface{}{
+					"PlayAddr": map[string]interface{}{"UrlList": []interface{}{videoURL}},
+				},
+			},
+		},
+	})
+}
+
+func rehydrationPageHTML(item map[string]interface{}) string {
+	root := map[string]interface{}{
 		"__DEFAULT_SCOPE__": map[string]interface{}{
 			"webapp.video-detail": map[string]interface{}{
 				"itemInfo": map[string]interface{}{
-					"itemStruct": map[string]interface{}{
-						"id":     "1234567890",
-						"desc":   desc,
-						"author": map[string]interface{}{"uniqueId": author},
-						"video": map[string]interface{}{
-							"cover": cover,
-							"bitrateInfo": []interface{}{
-								map[string]interface{}{
-									"PlayAddr": map[string]interface{}{"UrlList": []interface{}{videoURL}},
-								},
-							},
-						},
-					},
+					"itemStruct": item,
 				},
 			},
 		},
 	}
-	b, _ := json.Marshal(item)
+	b, _ := json.Marshal(root)
 	return `<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">` + string(b) + `</script>` + strings.Repeat("x", 300)
 }

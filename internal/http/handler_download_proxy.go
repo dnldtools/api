@@ -146,3 +146,51 @@ func sanitizeFilename(s string) string {
 	}
 	return b.String()
 }
+
+// externalBaseURL returns the public scheme://host the client used to reach
+// this API, honoring common reverse-proxy headers (X-Forwarded-Proto/Host).
+func externalBaseURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if v := firstForwarded(r.Header.Get("X-Forwarded-Proto")); v != "" {
+		scheme = v
+	}
+	host := r.Host
+	if v := firstForwarded(r.Header.Get("X-Forwarded-Host")); v != "" {
+		host = v
+	}
+	return scheme + "://" + host
+}
+
+func firstForwarded(v string) string {
+	if i := strings.IndexByte(v, ','); i >= 0 {
+		v = v[:i]
+	}
+	return strings.TrimSpace(v)
+}
+
+// proxyFormatURL builds the streaming-proxy URL for one resolved format. The
+// index is the zero-based position of the format among formats of the same
+// type, matching the proxy endpoint's pickProxyFormat.
+func proxyFormatURL(baseURL, sourceURL string, typ downloader.MediaType, index int) string {
+	q := url.Values{}
+	q.Set("url", sourceURL)
+	q.Set("type", string(typ))
+	q.Set("index", strconv.Itoa(index))
+	return strings.TrimRight(baseURL, "/") + "/v1/downloads/proxy?" + q.Encode()
+}
+
+// rewriteToProxyURLs replaces direct upstream CDN URLs with streaming-proxy
+// URLs so end users never contact the upstream directly (and never need to
+// send upstream cookies/referer headers themselves).
+func rewriteToProxyURLs(result *downloader.DownloadResult, baseURL string) {
+	seen := map[downloader.MediaType]int{}
+	for i := range result.Formats {
+		f := &result.Formats[i]
+		idx := seen[f.Type]
+		seen[f.Type]++
+		f.URL = proxyFormatURL(baseURL, result.URL, f.Type, idx)
+	}
+}
