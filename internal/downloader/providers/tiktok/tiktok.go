@@ -19,17 +19,23 @@ import (
 )
 
 const (
-	defaultRelay      = "https://cors.siputzx.my.id/"
-	defaultSnaptikAPI = "https://snaptik.net/api/ajaxSearch"
-	defaultUserAgent  = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-	maxResponseBytes  = 5 << 20
-	officialTimeout   = 15 * time.Second
-	snaptikTimeout    = 20 * time.Second
-	resolveURLTimeout = 15 * time.Second
+	defaultRelay        = "https://cors.siputzx.my.id/"
+	defaultSnaptikAPI   = "https://snaptik.net/api/ajaxSearch"
+	defaultOfficialBase = "https://www.tiktok.com"
+	defaultUserAgent    = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+	officialUserAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36 Edg/152.0.0.0"
+	maxResponseBytes    = 5 << 20
+	officialTimeout     = 15 * time.Second
+	snaptikTimeout      = 20 * time.Second
+	resolveURLTimeout   = 15 * time.Second
 )
 
 type Config struct {
 	RelayBaseURL string
+
+	// OfficialBaseURL overrides the base URL used for the direct official
+	// rehydration fetch. Defaults to https://www.tiktok.com; intended for tests.
+	OfficialBaseURL string
 
 	SnaptikAPIURL string
 
@@ -42,18 +48,20 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{
-		RelayBaseURL:  defaultRelay,
-		SnaptikAPIURL: defaultSnaptikAPI,
-		Timeout:       30 * time.Second,
-		UserAgent:     defaultUserAgent,
+		RelayBaseURL:    defaultRelay,
+		OfficialBaseURL: defaultOfficialBase,
+		SnaptikAPIURL:   defaultSnaptikAPI,
+		Timeout:         30 * time.Second,
+		UserAgent:       defaultUserAgent,
 	}
 }
 
 type Provider struct {
-	relay      string
-	snaptikAPI string
-	userAgent  string
-	client     *http.Client
+	relay        string
+	officialBase string
+	snaptikAPI   string
+	userAgent    string
+	client       *http.Client
 }
 
 var _ downloader.Provider = (*Provider)(nil)
@@ -67,6 +75,9 @@ func New() *Provider {
 func NewWithConfig(cfg Config) *Provider {
 	if cfg.RelayBaseURL == "" {
 		cfg.RelayBaseURL = defaultRelay
+	}
+	if cfg.OfficialBaseURL == "" {
+		cfg.OfficialBaseURL = defaultOfficialBase
 	}
 	if cfg.SnaptikAPIURL == "" {
 		cfg.SnaptikAPIURL = defaultSnaptikAPI
@@ -82,10 +93,11 @@ func NewWithConfig(cfg Config) *Provider {
 		client = &http.Client{Timeout: cfg.Timeout}
 	}
 	return &Provider{
-		relay:      strings.TrimRight(cfg.RelayBaseURL, "/"),
-		snaptikAPI: cfg.SnaptikAPIURL,
-		userAgent:  cfg.UserAgent,
-		client:     client,
+		relay:        strings.TrimRight(cfg.RelayBaseURL, "/"),
+		officialBase: strings.TrimRight(cfg.OfficialBaseURL, "/"),
+		snaptikAPI:   cfg.SnaptikAPIURL,
+		userAgent:    cfg.UserAgent,
+		client:       client,
 	}
 }
 
@@ -126,18 +138,20 @@ func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) 
 		return nil, err
 	}
 
-	snapRes, snapErr := p.querySnaptik(ctx, resolved)
-	if snapErr == nil && snapRes != nil && len(snapRes.Formats) > 0 {
-		snapRes.Platform = downloader.PlatformTikTok
-		snapRes.URL = resolved
-		return snapRes, nil
-	}
-
+	// Official rehydration is the primary path: it is tried first and only
+	// falls back to snaptik when the official scrape fails.
 	offRes, offErr := p.queryOfficial(ctx, resolved)
 	if offErr == nil && offRes != nil && len(offRes.Formats) > 0 {
 		offRes.Platform = downloader.PlatformTikTok
 		offRes.URL = resolved
 		return offRes, nil
+	}
+
+	snapRes, snapErr := p.querySnaptik(ctx, resolved)
+	if snapErr == nil && snapRes != nil && len(snapRes.Formats) > 0 {
+		snapRes.Platform = downloader.PlatformTikTok
+		snapRes.URL = resolved
+		return snapRes, nil
 	}
 
 	if snapErr != nil {
@@ -188,9 +202,12 @@ func (p *Provider) resolveTikTokURL(ctx context.Context, inputURL string) (strin
 }
 
 func (p *Provider) queryOfficial(ctx context.Context, target string) (*downloader.DownloadResult, error) {
-	body, _, status, err := p.do(ctx, http.MethodGet, viaRelay(p.relay, target), map[string]string{
-		"user-agent": p.userAgent,
-		"accept":     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+	// Direct fetch to TikTok (no relay), mirroring the reference scraper.
+	fetchURL := p.officialBase + officialPath(target)
+	body, _, status, err := p.do(ctx, http.MethodGet, fetchURL, map[string]string{
+		"user-agent":      officialUserAgent,
+		"accept":          "text/html",
+		"accept-language": "en-US,en;q=0.9",
 	}, nil, officialTimeout)
 	if err != nil {
 		return nil, err
@@ -212,9 +229,14 @@ func (p *Provider) queryOfficial(ctx context.Context, target string) (*downloade
 		return nil, stderrors.Join(downloader.ErrProviderInvalidResponse, err)
 	}
 
-	item := nestedMap(data, "__DEFAULT_SCOPE__", "webapp.video-detail", "itemInfo", "itemStruct")
-	if item == nil {
+	detail := nestedMap(data, "__DEFAULT_SCOPE__", "webapp.video-detail")
+	if detail == nil {
 		return nil, downloader.ErrProviderInvalidResponse
+	}
+
+	item := nestedMap(detail, "itemInfo", "itemStruct")
+	if item == nil || str(item["id"]) == "" {
+		return nil, downloader.ErrMediaNotFound
 	}
 
 	video := asMap(item["video"])
@@ -384,6 +406,26 @@ func mediaType(kind string) downloader.MediaType {
 	}
 }
 
+// officialPath derives the canonical TikTok page path for a video URL,
+// mirroring the reference scraper: strip query parameters and, for inputs that
+// are not already tiktok.com URLs (e.g. a raw video id), use the stable
+// /@i/video/<id> route.
+func officialPath(input string) string {
+	u := strings.TrimSpace(input)
+	if i := strings.IndexByte(u, '?'); i >= 0 {
+		u = u[:i]
+	}
+	if !strings.Contains(u, "tiktok.com") {
+		if id := firstMatch(reVideoID, u); id != "" {
+			return "/@i/video/" + id
+		}
+	}
+	if parsed, err := url.Parse(u); err == nil && parsed.Path != "" {
+		return parsed.Path
+	}
+	return u
+}
+
 func (p *Provider) do(ctx context.Context, method, target string, headers map[string]string, body []byte, timeout time.Duration) (string, string, int, error) {
 	if timeout > 0 {
 		var cancel context.CancelFunc
@@ -516,6 +558,7 @@ func pickPlayURL(video map[string]interface{}) string {
 
 var (
 	reShortLink    = regexp.MustCompile(`(?i)^(https?://)?(?:(?:vm|vt|m)\.tiktok\.com|v\.douyin\.com)/`)
+	reVideoID      = regexp.MustCompile(`(\d{15,})`)
 	reCanonical1   = regexp.MustCompile(`(?i)rel=["']canonical["'][^>]+href=["']([^"']+)`)
 	reCanonical2   = regexp.MustCompile(`(?i)href=["']([^"']+)["'][^>]+rel=["']canonical["']`)
 	reOGURL        = regexp.MustCompile(`(?i)property=["']og:url["'][^>]+content=["']([^"']+)`)

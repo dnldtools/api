@@ -78,7 +78,7 @@ func TestResolveOfficialVideo(t *testing.T) {
 	}))
 	defer relay.Close()
 
-	p := NewWithConfig(Config{RelayBaseURL: relay.URL})
+	p := NewWithConfig(Config{RelayBaseURL: relay.URL, OfficialBaseURL: relay.URL})
 	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testVideoURL})
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
@@ -112,6 +112,7 @@ func TestResolveOfficialVideo(t *testing.T) {
 func TestResolveOfficialPhotoPost(t *testing.T) {
 	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(rehydrationPage(map[string]interface{}{
+			"id":     "1234567890",
 			"desc":   "Slideshow",
 			"author": map[string]interface{}{"nickname": "Alice"},
 			"imagePost": map[string]interface{}{
@@ -132,7 +133,7 @@ func TestResolveOfficialPhotoPost(t *testing.T) {
 	}))
 	defer relay.Close()
 
-	p := NewWithConfig(Config{RelayBaseURL: relay.URL})
+	p := NewWithConfig(Config{RelayBaseURL: relay.URL, OfficialBaseURL: relay.URL})
 	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testVideoURL})
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
@@ -185,7 +186,7 @@ func TestResolveSnaptik(t *testing.T) {
 	}))
 	defer relay.Close()
 
-	p := NewWithConfig(Config{RelayBaseURL: relay.URL})
+	p := NewWithConfig(Config{RelayBaseURL: relay.URL, OfficialBaseURL: relay.URL})
 	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testVideoURL})
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
@@ -238,7 +239,7 @@ func TestResolveShortLink(t *testing.T) {
 	}))
 	defer relay.Close()
 
-	p := NewWithConfig(Config{RelayBaseURL: relay.URL})
+	p := NewWithConfig(Config{RelayBaseURL: relay.URL, OfficialBaseURL: relay.URL})
 	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testShortURL})
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
@@ -263,7 +264,7 @@ func TestResolveShortLinkNonMediaPage(t *testing.T) {
 	}))
 	defer relay.Close()
 
-	p := NewWithConfig(Config{RelayBaseURL: relay.URL})
+	p := NewWithConfig(Config{RelayBaseURL: relay.URL, OfficialBaseURL: relay.URL})
 	_, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testShortURL})
 	if !stderrors.Is(err, downloader.ErrMediaNotFound) {
 		t.Fatalf("error = %v, want ErrMediaNotFound", err)
@@ -286,7 +287,7 @@ func TestResolveSnaptikNoMediaIsMediaNotFound(t *testing.T) {
 	}))
 	defer relay.Close()
 
-	p := NewWithConfig(Config{RelayBaseURL: relay.URL})
+	p := NewWithConfig(Config{RelayBaseURL: relay.URL, OfficialBaseURL: relay.URL})
 	_, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testVideoURL})
 	if !stderrors.Is(err, downloader.ErrMediaNotFound) {
 		t.Fatalf("error = %v, want ErrMediaNotFound", err)
@@ -309,7 +310,7 @@ func TestResolveSnaptikProfileURLIsMediaNotFound(t *testing.T) {
 	}))
 	defer relay.Close()
 
-	p := NewWithConfig(Config{RelayBaseURL: relay.URL})
+	p := NewWithConfig(Config{RelayBaseURL: relay.URL, OfficialBaseURL: relay.URL})
 	_, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testVideoURL})
 	if !stderrors.Is(err, downloader.ErrMediaNotFound) {
 		t.Fatalf("error = %v, want ErrMediaNotFound", err)
@@ -332,7 +333,7 @@ func TestResolveSnaptikErrorIsInvalidResponse(t *testing.T) {
 	}))
 	defer relay.Close()
 
-	p := NewWithConfig(Config{RelayBaseURL: relay.URL})
+	p := NewWithConfig(Config{RelayBaseURL: relay.URL, OfficialBaseURL: relay.URL})
 	_, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testVideoURL})
 	if !stderrors.Is(err, downloader.ErrProviderInvalidResponse) {
 		t.Fatalf("error = %v, want ErrProviderInvalidResponse", err)
@@ -346,7 +347,7 @@ func TestResolveTimeout(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewWithConfig(Config{RelayBaseURL: srv.URL, Timeout: 50 * time.Millisecond})
+	p := NewWithConfig(Config{RelayBaseURL: srv.URL, OfficialBaseURL: srv.URL, Timeout: 50 * time.Millisecond})
 	_, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testVideoURL})
 	if !stderrors.Is(err, downloader.ErrProviderTimeout) {
 		t.Fatalf("error = %v, want ErrProviderTimeout", err)
@@ -456,6 +457,7 @@ func rehydrationPage(item map[string]interface{}) string {
 
 func videoItem(desc, url string) map[string]interface{} {
 	return map[string]interface{}{
+		"id":     "1234567890",
 		"desc":   desc,
 		"author": map[string]interface{}{"uniqueId": "alice"},
 		"video": map[string]interface{}{

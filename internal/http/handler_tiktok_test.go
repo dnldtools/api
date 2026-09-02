@@ -15,7 +15,7 @@ func registryWithTikTok(t *testing.T, relayURL string) *downloader.Service {
 	t.Helper()
 	registry := downloader.NewRegistry()
 	for _, p := range []downloader.Provider{
-		tiktok.NewWithConfig(tiktok.Config{RelayBaseURL: relayURL}),
+		tiktok.NewWithConfig(tiktok.Config{RelayBaseURL: relayURL, OfficialBaseURL: relayURL}),
 	} {
 		if err := registry.Register(p); err != nil {
 			t.Fatalf("register provider: %v", err)
@@ -125,6 +125,7 @@ func tiktokRehydrationHTML(desc, author, cover, videoURL string) string {
 			"webapp.video-detail": map[string]interface{}{
 				"itemInfo": map[string]interface{}{
 					"itemStruct": map[string]interface{}{
+						"id":     "1234567890",
 						"desc":   desc,
 						"author": map[string]interface{}{"uniqueId": author},
 						"video": map[string]interface{}{
