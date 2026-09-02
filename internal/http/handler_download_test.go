@@ -18,13 +18,19 @@ import (
 
 func newRouterWithService(t *testing.T, svc *downloader.Service) http.Handler {
 	t.Helper()
+	return newRouterWithServiceAndBase(t, svc, "")
+}
+
+func newRouterWithServiceAndBase(t *testing.T, svc *downloader.Service, base string) http.Handler {
+	t.Helper()
 	return NewRouter(Dependencies{
-		PrettyJSON:  false,
-		Logger:      slog.Default(),
-		Downloader:  svc,
-		Auth:        &fakeAuthenticator{},
-		RateLimiter: ratelimit.NewMemoryLimiter(),
-		Quota:       &fakeQuota{},
+		PrettyJSON:    false,
+		Logger:        slog.Default(),
+		Downloader:    svc,
+		PublicBaseURL: base,
+		Auth:          &fakeAuthenticator{},
+		RateLimiter:   ratelimit.NewMemoryLimiter(),
+		Quota:         &fakeQuota{},
 	})
 }
 

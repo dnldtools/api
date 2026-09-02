@@ -2,6 +2,7 @@ package http
 
 import (
 	"net/http"
+	"strings"
 
 	"rest-api/internal/downloader"
 	apperrors "rest-api/internal/errors"
@@ -12,7 +13,7 @@ type downloadRequest struct {
 	URL      string `json:"url"`
 }
 
-func handleDownload(svc *downloader.Service, errHandler *ErrorHandler) http.HandlerFunc {
+func handleDownload(svc *downloader.Service, errHandler *ErrorHandler, publicBaseURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req downloadRequest
 		if err := decodeJSON(r, &req); err != nil {
@@ -35,7 +36,11 @@ func handleDownload(svc *downloader.Service, errHandler *ErrorHandler) http.Hand
 		// streaming-proxy endpoint so clients never have to send upstream
 		// cookies/referer headers (and never hit 403 on the CDN directly).
 		if result.Platform == downloader.PlatformTikTok {
-			rewriteToProxyURLs(result, externalBaseURL(r))
+			base := strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
+			if base == "" {
+				base = externalBaseURL(r)
+			}
+			rewriteToProxyURLs(result, base)
 		}
 
 		WriteSuccess(w, r, http.StatusOK, result)

@@ -162,18 +162,19 @@ func New(cfg *config.Config, logger *slog.Logger) (*Application, error) {
 
 	errHandler := apphttp.NewErrorHandler(logger)
 	router := apphttp.NewRouter(apphttp.Dependencies{
-		PrettyJSON:   cfg.PrettyJSON,
-		Logger:       logger,
-		Downloader:   a.downloader,
-		Youtube:      a.youtube,
-		Metrics:      a.metrics,
-		Auth:         authSvc,
-		Keys:         keySvc,
-		Admin:        adminSvc,
-		RateLimiter:  rateLimiter,
-		Quota:        quotaSvc,
-		Plans:        policies,
-		ErrorHandler: errHandler,
+		PrettyJSON:    cfg.PrettyJSON,
+		Logger:        logger,
+		Downloader:    a.downloader,
+		Youtube:       a.youtube,
+		PublicBaseURL: cfg.PublicBaseURL,
+		Metrics:       a.metrics,
+		Auth:          authSvc,
+		Keys:          keySvc,
+		Admin:         adminSvc,
+		RateLimiter:   rateLimiter,
+		Quota:         quotaSvc,
+		Plans:         policies,
+		ErrorHandler:  errHandler,
 	})
 	a.server = apphttp.NewServer(apphttp.ServerConfig{
 		Addr:            cfg.Addr(),

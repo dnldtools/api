@@ -168,6 +168,41 @@ func TestDownloadTikTokRewritesFormatsToProxyURLs(t *testing.T) {
 	}
 }
 
+func TestDownloadTikTokUsesConfiguredPublicBaseURL(t *testing.T) {
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(tiktokRehydrationHTML("Reel", "alice", "https://cdn.example.com/t.jpg", "https://cdn.example.com/v.mp4")))
+	}))
+	defer relay.Close()
+
+	router := newRouterWithServiceAndBase(t, registryWithTikTok(t, relay.URL), "https://api.dnld.app/")
+	rec := postDownload(t, router, testAPIKey, `{"platform":"tiktok","url":"https://www.tiktok.com/@alice/video/1234567890"}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var envelope struct {
+		Data struct {
+			Formats []struct {
+				URL string `json:"url"`
+			} `json:"formats"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if len(envelope.Data.Formats) == 0 {
+		t.Fatal("no formats returned")
+	}
+	u, err := url.Parse(envelope.Data.Formats[0].URL)
+	if err != nil {
+		t.Fatalf("parse format url: %v", err)
+	}
+	if got := u.Scheme + "://" + u.Host; got != "https://api.dnld.app" {
+		t.Errorf("format url base = %q, want https://api.dnld.app", got)
+	}
+}
+
 func TestDownloadTikTokMediaNotFoundThroughHandler(t *testing.T) {
 	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "snaptik.net") {

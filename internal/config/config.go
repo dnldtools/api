@@ -19,6 +19,12 @@ type Config struct {
 	HTTPHost string
 	HTTPPort string
 
+	// PublicBaseURL is the externally reachable base URL of this API (e.g.
+	// https://api.dnld.app). When set it is used to build absolute URLs in
+	// responses (like streaming-proxy links) instead of deriving them from the
+	// incoming request, which is unreliable behind a reverse proxy.
+	PublicBaseURL string
+
 	ReadTimeout     time.Duration
 	WriteTimeout    time.Duration
 	IdleTimeout     time.Duration
@@ -46,6 +52,7 @@ func Load() (*Config, error) {
 		AppVersion:      env.Get("APP_VERSION", "0.1.0"),
 		HTTPHost:        env.Get("HTTP_HOST", "0.0.0.0"),
 		HTTPPort:        env.Get("HTTP_PORT", "8080"),
+		PublicBaseURL:   env.Get("PUBLIC_BASE_URL", ""),
 		ReadTimeout:     env.GetDuration("HTTP_READ_TIMEOUT", 30*time.Second),
 		WriteTimeout:    env.GetDuration("HTTP_WRITE_TIMEOUT", 60*time.Second),
 		IdleTimeout:     env.GetDuration("HTTP_IDLE_TIMEOUT", 60*time.Second),

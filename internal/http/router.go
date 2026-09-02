@@ -19,6 +19,10 @@ type Dependencies struct {
 	Downloader *downloader.Service
 	Youtube    *youtube.Service
 
+	// PublicBaseURL is used to build absolute URLs in responses (e.g.
+	// streaming-proxy links). Empty means derive from the request.
+	PublicBaseURL string
+
 	Metrics *metrics.Service
 
 	Auth auth.Authenticator
@@ -64,7 +68,7 @@ func NewRouter(deps Dependencies) http.Handler {
 
 	mux := http.NewServeMux()
 
-	downloadHandler := handleDownload(deps.Downloader, errHandler)
+	downloadHandler := handleDownload(deps.Downloader, errHandler, deps.PublicBaseURL)
 	protected := chain(
 		downloadHandler,
 		authMiddleware(deps.Auth, errHandler),
