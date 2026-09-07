@@ -4,11 +4,13 @@ import (
 	"context"
 	stderrors "errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"rest-api/internal/browser"
 	"rest-api/internal/downloader"
 	apperrors "rest-api/internal/errors"
+	"rest-api/internal/youtube"
 )
 
 func TestMapErrorNil(t *testing.T) {
@@ -124,6 +126,31 @@ func TestMapErrorProviderInvalidResponse(t *testing.T) {
 	}
 	if got.Retryable {
 		t.Error("Retryable = true, want false")
+	}
+}
+
+func TestMapErrorMessagesAreFriendlyAndDoNotLeakInternals(t *testing.T) {
+	cases := []struct {
+		err       error
+		forbidden []string
+	}{
+		{downloader.ErrProviderInvalidResponse, []string{"snapinsta", "snapsave", "instasave", "provider", "upstream"}},
+		{downloader.ErrProviderUnavailable, []string{"snapinsta", "snapsave", "instasave", "provider", "upstream"}},
+		{downloader.ErrMediaNotFound, []string{"snapinsta", "snapsave", "instasave", "provider", "upstream"}},
+		{downloader.ErrProviderTimeout, []string{"snapinsta", "snapsave", "instasave", "provider", "upstream"}},
+		{youtube.ErrProviderInvalidResponse, []string{"youtube", "snaptik", "provider"}},
+	}
+
+	for _, tc := range cases {
+		got := mapError(tc.err)
+		if got.Message == "" {
+			t.Errorf("mapError(%v).Message is empty; want a friendly message", tc.err)
+		}
+		for _, word := range tc.forbidden {
+			if strings.Contains(strings.ToLower(got.Message), word) {
+				t.Errorf("mapError(%v).Message = %q leaks internal detail %q", tc.err, got.Message, word)
+			}
+		}
 	}
 }
 

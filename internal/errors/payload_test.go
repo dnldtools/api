@@ -30,6 +30,9 @@ func TestPayloadJSONSerialization(t *testing.T) {
 	if m["category"] != "VALIDATION" {
 		t.Errorf("category = %v, want VALIDATION", m["category"])
 	}
+	if m["message"] != "invalid url" {
+		t.Errorf("message = %v, want %q", m["message"], "invalid url")
+	}
 	if m["retryable"] != false {
 		t.Errorf("retryable = %v, want false", m["retryable"])
 	}

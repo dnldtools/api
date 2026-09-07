@@ -10,10 +10,14 @@ import (
 	"rest-api/internal/downloader/providers/tiktok"
 )
 
-func RegisterAll(registry *downloader.Registry) error {
+func RegisterAll(registry *downloader.Registry, opts ...Options) error {
+	var o Options
+	if len(opts) > 0 {
+		o = opts[0]
+	}
 	for _, p := range []downloader.Provider{
 		facebook.New(),
-		instagram.New(),
+		instagram.NewWithConfig(instagram.Config{InstagramCookie: o.InstagramCookie}),
 		tiktok.New(),
 		shopee.New(),
 		// 9xbuddy is an all-in-one fallback: registered last so dedicated
@@ -29,4 +33,12 @@ func RegisterAll(registry *downloader.Registry) error {
 		}
 	}
 	return nil
+}
+
+// Options configures optional provider behaviour that is controlled through
+// environment variables rather than code.
+type Options struct {
+	// InstagramCookie is a logged-in Instagram session cookie used to unlock
+	// the official GraphQL path for full metadata.
+	InstagramCookie string
 }

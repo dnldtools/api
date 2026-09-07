@@ -126,7 +126,7 @@ func recoverMiddleware(errHandler *ErrorHandler) Middleware {
 						"request_id", requestIDFromContext(r.Context()),
 					)
 					if !rec.wroteHeader {
-						errHandler.Handle(rec, r, apperrors.Internal(apperrors.CodeInternalError, "internal server error"))
+						errHandler.Handle(rec, r, apperrors.Internal(apperrors.CodeInternalError, "Something went wrong on our end. Please try again."))
 					}
 				}
 			}()

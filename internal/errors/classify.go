@@ -23,7 +23,7 @@ func From(err error) *AppError {
 
 		return Internal(CodeInternalError, "request canceled").WithCause(err)
 	default:
-		return Internal(CodeInternalError, "internal server error").WithCause(err)
+		return Internal(CodeInternalError, "Something went wrong on our end. Please try again.").WithCause(err)
 	}
 }
 

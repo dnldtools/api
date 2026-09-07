@@ -21,7 +21,7 @@ func NewErrorHandler(logger *slog.Logger) *ErrorHandler {
 
 func (h *ErrorHandler) Handle(w http.ResponseWriter, r *http.Request, err error) {
 	if err == nil {
-		err = apperrors.Internal(apperrors.CodeInternalError, "internal server error")
+		err = apperrors.Internal(apperrors.CodeInternalError, "Something went wrong on our end. Please try again.")
 	}
 
 	appErr := mapError(err)

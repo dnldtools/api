@@ -74,6 +74,7 @@ func (e *AppError) WithTimestamp(ts time.Time) *AppError {
 type Payload struct {
 	Code      string      `json:"code"`
 	Category  Category    `json:"category"`
+	Message   string      `json:"message"`
 	Details   interface{} `json:"details"`
 	Retryable bool        `json:"retryable"`
 	RequestID string      `json:"request_id"`
@@ -91,6 +92,7 @@ func (e *AppError) Payload() *Payload {
 	return &Payload{
 		Code:      string(e.Code),
 		Category:  e.Category,
+		Message:   e.Message,
 		Details:   e.Details,
 		Retryable: e.Retryable,
 		RequestID: e.RequestID,

@@ -75,7 +75,7 @@ func TestErrorHandlerUnknownErrorBecomesInternal(t *testing.T) {
 	if code, _ := errObj["code"].(string); code != "INTERNAL_ERROR" {
 		t.Errorf("error.code = %q, want INTERNAL_ERROR", code)
 	}
-	if msg, _ := body["message"].(string); msg != "internal server error" {
+	if msg, _ := body["message"].(string); msg != "Something went wrong on our end. Please try again." {
 		t.Errorf("message = %q, want generic internal message", msg)
 	}
 }

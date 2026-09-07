@@ -25,6 +25,13 @@ type Config struct {
 	// incoming request, which is unreliable behind a reverse proxy.
 	PublicBaseURL string
 
+	// InstagramCookie is an optional logged-in Instagram session cookie
+	// (e.g. `sessionid=...; ds_user_id=...; csrftoken=...`). When set, the
+	// official Instagram GraphQL path is used for posts/reels so responses
+	// include full metadata (author, caption, likes, views, dimensions, etc.)
+	// instead of only download URLs from the scraper fallbacks.
+	InstagramCookie string
+
 	ReadTimeout     time.Duration
 	WriteTimeout    time.Duration
 	IdleTimeout     time.Duration
@@ -53,6 +60,7 @@ func Load() (*Config, error) {
 		HTTPHost:        env.Get("HTTP_HOST", "0.0.0.0"),
 		HTTPPort:        env.Get("HTTP_PORT", "8080"),
 		PublicBaseURL:   env.Get("PUBLIC_BASE_URL", ""),
+		InstagramCookie: env.Get("INSTAGRAM_COOKIE", ""),
 		ReadTimeout:     env.GetDuration("HTTP_READ_TIMEOUT", 30*time.Second),
 		WriteTimeout:    env.GetDuration("HTTP_WRITE_TIMEOUT", 60*time.Second),
 		IdleTimeout:     env.GetDuration("HTTP_IDLE_TIMEOUT", 60*time.Second),

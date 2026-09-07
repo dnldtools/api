@@ -56,7 +56,7 @@ func New(cfg *config.Config, logger *slog.Logger) (*Application, error) {
 	a := &Application{cfg: cfg, logger: logger}
 
 	registry := downloader.NewRegistry()
-	if err := providers.RegisterAll(registry); err != nil {
+	if err := providers.RegisterAll(registry, providers.Options{InstagramCookie: cfg.InstagramCookie}); err != nil {
 		return nil, fmt.Errorf("app: register providers: %w", err)
 	}
 	a.downloader = downloader.NewService(registry)

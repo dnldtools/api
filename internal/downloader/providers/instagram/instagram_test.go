@@ -63,6 +63,68 @@ func TestResolveNonInstagramURL(t *testing.T) {
 	}
 }
 
+func TestBuildMetadataRichOfficialFields(t *testing.T) {
+	post := map[string]interface{}{
+		"shortcode":          "abc12",
+		"media_type":         float64(2),
+		"product_type":       "clips",
+		"video_duration":     12.5,
+		"video_view_count":   float64(9876),
+		"taken_at_timestamp": float64(1700000000),
+		"dimensions":         map[string]interface{}{"width": float64(1080), "height": float64(1920)},
+		"owner": map[string]interface{}{
+			"id":              "123",
+			"username":        "alice",
+			"full_name":       "Alice Doe",
+			"profile_pic_url": "https://cdn.example.com/avatar.jpg",
+			"is_verified":     true,
+		},
+		"caption":                 "Hello world",
+		"edge_media_preview_like": map[string]interface{}{"count": float64(42)},
+		"edge_media_to_comment":   map[string]interface{}{"count": float64(7)},
+		"location":                map[string]interface{}{"name": "Jakarta"},
+	}
+
+	md := buildMetadata(post)
+	checks := map[string]string{
+		"author":             "alice",
+		"author_name":        "Alice Doe",
+		"author_id":          "123",
+		"author_profile_pic": "https://cdn.example.com/avatar.jpg",
+		"author_verified":    "true",
+		"caption":            "Hello world",
+		"likes":              "42",
+		"comments":           "7",
+		"views":              "9876",
+		"width":              "1080",
+		"height":             "1920",
+		"media_type":         "video",
+		"product_type":       "clips",
+		"location":           "Jakarta",
+		"shortcode":          "abc12",
+		"taken_at":           "2023-11-14T22:13:20Z",
+	}
+	for k, want := range checks {
+		if got := md[k]; got != want {
+			t.Errorf("metadata[%q] = %q, want %q", k, got, want)
+		}
+	}
+}
+
+func TestBuildResultSetsDurationMs(t *testing.T) {
+	post := map[string]interface{}{"video_duration": 12.5}
+	items := []mediaItem{{kind: "video", url: "https://cdn.example.com/v.mp4"}}
+
+	result := New().buildResult(post, items)
+
+	if result.DurationMs != 12500 {
+		t.Errorf("DurationMs = %d, want 12500", result.DurationMs)
+	}
+	if got := result.Metadata["author"]; got != "" {
+		t.Errorf("Metadata author = %q, want empty (no owner in post)", got)
+	}
+}
+
 func TestResolveOfficialEmbeddedVideo(t *testing.T) {
 	htmlBody := `<html><head><script type="application/json">{"xig_polaris_media":{"code":"abc12","caption":"Hello world","user":{"username":"alice"},"media_type":2,"video_url":"https:\/\/cdn.example.com\/v.mp4","display_url":"https:\/\/cdn.example.com\/t.jpg"}}</script></head><body></body></html>`
 
@@ -214,6 +276,9 @@ func TestResolveStorySkipsOfficial(t *testing.T) {
 	}))
 	defer relay.Close()
 
+	snapsave := httptest.NewServer(http.NotFoundHandler())
+	defer snapsave.Close()
+
 	thumb := "https://d.rapidcdn.app/thumb?token=" + fakeJWT(`{"url":"https://cdn.example.com/s.jpg"}`)
 	snap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
@@ -224,7 +289,12 @@ func TestResolveStorySkipsOfficial(t *testing.T) {
 	}))
 	defer snap.Close()
 
-	p := NewWithConfig(Config{RelayBaseURL: relay.URL, SnapinstaBaseURL: snap.URL})
+	p := NewWithConfig(Config{
+		RelayBaseURL:      relay.URL,
+		SnapinstaBaseURL:  snap.URL,
+		SnapsaveHomeURL:   snapsave.URL,
+		SnapsaveActionURL: snapsave.URL,
+	})
 	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testStoryURL})
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
@@ -234,6 +304,82 @@ func TestResolveStorySkipsOfficial(t *testing.T) {
 	}
 	if relayHits != 0 {
 		t.Errorf("relay hits = %d, want 0 (story must skip official)", relayHits)
+	}
+}
+
+func TestResolveStoryUsesSnapsaveFirst(t *testing.T) {
+	var relayHits int
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		relayHits++
+		http.NotFound(w, r)
+	}))
+	defer relay.Close()
+
+	thumb := "https://d.rapidcdn.app/thumb?token=" + fakeJWT(`{"url":"https://cdn.example.com/s.jpg"}`)
+	snapsave := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(evalPayload(thumb)))
+	}))
+	defer snapsave.Close()
+
+	snap := httptest.NewServer(http.NotFoundHandler()) // must not be reached
+	defer snap.Close()
+
+	p := NewWithConfig(Config{
+		RelayBaseURL:      relay.URL,
+		SnapinstaBaseURL:  snap.URL,
+		SnapsaveHomeURL:   snapsave.URL,
+		SnapsaveActionURL: snapsave.URL,
+	})
+	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testStoryURL})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if len(result.Formats) != 1 || result.Formats[0].URL != "https://cdn.example.com/s.jpg" {
+		t.Fatalf("Formats = %+v, want s.jpg", result.Formats)
+	}
+	if relayHits != 0 {
+		t.Errorf("relay hits = %d, want 0 (story must skip official)", relayHits)
+	}
+}
+
+func TestResolveMediaInstasaveFallback(t *testing.T) {
+	token := fakeJWT(`{"url":"https://cdn.example.com/v.mp4"}`)
+	thumbToken := fakeJWT(`{"url":"https://cdn.example.com/t.jpg"}`)
+	body := strings.Repeat("x", 500) +
+		`<a href="https://cdn.instasave.website/?token=` + token + `"></a>` +
+		`<img src="https://cdn.instasave.website/?token=` + thumbToken + `">`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "api.instasave.website") {
+			_, _ = w.Write([]byte(body))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	snap := httptest.NewServer(http.NotFoundHandler())
+	defer snap.Close()
+
+	p := NewWithConfig(Config{RelayBaseURL: srv.URL, SnapinstaBaseURL: snap.URL})
+	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testPostURL})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if len(result.Formats) != 1 || result.Formats[0].URL != "https://cdn.example.com/v.mp4" {
+		t.Fatalf("Formats = %+v, want v.mp4", result.Formats)
+	}
+	if result.Thumbnail != "https://cdn.example.com/t.jpg" {
+		t.Errorf("Thumbnail = %q, want t.jpg", result.Thumbnail)
+	}
+}
+
+func TestDecodeHexEscapes(t *testing.T) {
+	if got := decodeHexEscapes(`a\x41b\x2Fc\x3Dd`); got != "aAb/c=d" {
+		t.Errorf("decodeHexEscapes() = %q, want aAb/c=d", got)
+	}
+	if got := decodeHexEscapes(`\xZZ`); got != `\xZZ` {
+		t.Errorf("decodeHexEscapes(invalid) = %q, want unchanged", got)
 	}
 }
 
@@ -378,4 +524,37 @@ func fakeJWT(payload string) string {
 func evalPayload(inner string) string {
 	b, _ := json.Marshal(inner)
 	return `eval(function(h,u,n,t,e,r){return ` + string(b) + `;}('x','y'))`
+}
+
+func TestQueryOfficialSendsInstagramCookie(t *testing.T) {
+	htmlBody := `<html><head><script type="application/json">{"xig_polaris_media":{"code":"abc12","caption":"Hi","user":{"username":"alice"},"media_type":2,"video_url":"https://cdn.example.com/v.mp4","display_url":"https://cdn.example.com/t.jpg"}}</script></head></html>`
+
+	var gotCookie string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCookie = r.Header.Get("Cookie")
+		_, _ = w.Write([]byte(htmlBody))
+	}))
+	defer srv.Close()
+
+	p := NewWithConfig(Config{RelayBaseURL: srv.URL, InstagramCookie: "sessionid=abc; csrftoken=xyz"})
+	if _, err := p.queryOfficial(context.Background(), testPostURL, "abc12"); err != nil {
+		t.Fatalf("queryOfficial() error = %v", err)
+	}
+	if gotCookie != "sessionid=abc; csrftoken=xyz" {
+		t.Errorf("Cookie header = %q, want configured cookie", gotCookie)
+	}
+}
+
+func TestCookieValue(t *testing.T) {
+	cases := map[string]string{
+		"csrftoken":  "xyz",
+		"ds_user_id": "123",
+		"missing":    "",
+	}
+	header := "sessionid=abc; csrftoken=xyz; ds_user_id=123"
+	for name, want := range cases {
+		if got := cookieValue(header, name); got != want {
+			t.Errorf("cookieValue(%q) = %q, want %q", name, got, want)
+		}
+	}
 }
