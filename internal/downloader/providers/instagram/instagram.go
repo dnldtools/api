@@ -18,6 +18,7 @@ import (
 	"github.com/dop251/goja"
 
 	"rest-api/internal/downloader"
+	"rest-api/internal/downloader/providers/snapx"
 )
 
 const (
@@ -63,12 +64,18 @@ type Config struct {
 	BrowserUserAgent string
 
 	// InstagramCookie is an optional logged-in Instagram session cookie
-	// (e.g. `sessionid=...; ds_user_id=...; csrftoken=...`). When set it is
-	// attached to the official GraphQL requests so posts/reels resolve with
-	// full metadata instead of falling back to URL-only scrapers.
+	// (e.g. `sessionid=...; ds_user_id=...; csrftoken=...`). Public posts and
+	// reels resolve without it via the embedded page data and the embed
+	// endpoint; the cookie is only used for the legacy GraphQL fallback
+	// (e.g. private/age-gated media).
 	InstagramCookie string
 
 	HTTPClient *http.Client
+
+	// SnapXEnabled turns on api.snapx.info as a last-resort fallback.
+	// DefaultConfig enables it; tests using NewWithConfig stay off unless set.
+	SnapXEnabled bool
+	SnapX        *snapx.Client
 }
 
 func DefaultConfig() Config {
@@ -80,6 +87,7 @@ func DefaultConfig() Config {
 		Timeout:           30 * time.Second,
 		IGUserAgent:       defaultIGUA,
 		BrowserUserAgent:  defaultBrowserUA,
+		SnapXEnabled:      true,
 	}
 }
 
@@ -92,6 +100,7 @@ type Provider struct {
 	browserUA      string
 	igCookie       string
 	client         *http.Client
+	snapx          *snapx.Client
 }
 
 var _ downloader.Provider = (*Provider)(nil)
@@ -128,7 +137,7 @@ func NewWithConfig(cfg Config) *Provider {
 	if client == nil {
 		client = &http.Client{Timeout: cfg.Timeout}
 	}
-	return &Provider{
+	p := &Provider{
 		relay:          strings.TrimRight(cfg.RelayBaseURL, "/"),
 		snapinsta:      strings.TrimRight(cfg.SnapinstaBaseURL, "/"),
 		snapsaveHome:   strings.TrimRight(cfg.SnapsaveHomeURL, "/"),
@@ -138,6 +147,14 @@ func NewWithConfig(cfg Config) *Provider {
 		igCookie:       strings.TrimSpace(cfg.InstagramCookie),
 		client:         client,
 	}
+	if cfg.SnapXEnabled {
+		if cfg.SnapX != nil {
+			p.snapx = cfg.SnapX
+		} else {
+			p.snapx = snapx.NewWithConfig(snapx.Config{HTTPClient: client, Timeout: cfg.Timeout})
+		}
+	}
+	return p
 }
 
 func (p *Provider) Name() string { return "instagram" }
@@ -179,6 +196,11 @@ func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) 
 			func(ctx context.Context) (*downloader.DownloadResult, error) { return p.querySnapinsta(ctx, inputURL) },
 		}
 	}
+	if p.snapx != nil {
+		strategies = append(strategies, func(ctx context.Context) (*downloader.DownloadResult, error) {
+			return p.querySnapX(ctx, inputURL)
+		})
+	}
 
 	var lastErr error
 	for _, run := range strategies {
@@ -196,6 +218,13 @@ func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) 
 		lastErr = downloader.ErrMediaNotFound
 	}
 	return nil, lastErr
+}
+
+func (p *Provider) querySnapX(ctx context.Context, inputURL string) (*downloader.DownloadResult, error) {
+	if p.snapx == nil {
+		return nil, downloader.ErrMediaNotFound
+	}
+	return p.snapx.Instagram(ctx, inputURL)
 }
 
 func (p *Provider) queryOfficial(ctx context.Context, inputURL, shortcode string) (*downloader.DownloadResult, error) {
@@ -233,6 +262,14 @@ func (p *Provider) queryOfficial(ctx context.Context, inputURL, shortcode string
 				return p.buildResult(post, items), nil
 			}
 		}
+	}
+
+	// The GraphQL endpoint below is login-gated for most posts: logged-out
+	// clients get a login-required payload. The embed page serves the same
+	// `shortcode_media` object to anonymous visitors, so try it as a
+	// cookie-free source before GraphQL.
+	if res, err := p.queryEmbed(ctx, shortcode); err == nil {
+		return res, nil
 	}
 
 	csrf := firstMatch(reCSRF, pageBody)
@@ -286,6 +323,50 @@ func (p *Provider) queryOfficial(ctx context.Context, inputURL, shortcode string
 		return nil, downloader.ErrMediaNotFound
 	}
 	return p.buildResult(gql.Data.Media, items), nil
+}
+
+// queryEmbed resolves a public post/reel without a session cookie by reading
+// the embed page, which serves the same `shortcode_media` object to logged-out
+// clients inside window.__additionalDataLoaded('extra', {...}).
+func (p *Provider) queryEmbed(ctx context.Context, shortcode string) (*downloader.DownloadResult, error) {
+	embedURL := "https://www.instagram.com/p/" + shortcode + "/embed/captioned/"
+
+	body, status, err := p.do(ctx, http.MethodGet, viaRelay(p.relay, embedURL), map[string]string{
+		"user-agent": p.browserUA,
+		"accept":     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+	}, nil, nil, 8*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if status < http.StatusOK || status >= http.StatusMultipleChoices || len(body) < 200 {
+		return nil, classifyHTTPStatus(status)
+	}
+
+	marker := `__additionalDataLoaded('extra'`
+	idx := strings.Index(body, marker)
+	if idx == -1 {
+		return nil, downloader.ErrMediaNotFound
+	}
+	data := extractJSONObject(body, idx)
+	if data == nil {
+		return nil, downloader.ErrMediaNotFound
+	}
+
+	media := asMap(data["shortcode_media"])
+	if media == nil {
+		if inner, ok := data["items"].([]interface{}); ok && len(inner) > 0 {
+			media = asMap(inner[0])
+		}
+	}
+	if media == nil {
+		return nil, downloader.ErrMediaNotFound
+	}
+
+	items := itemsFromOfficial(media)
+	if len(items) == 0 {
+		return nil, downloader.ErrMediaNotFound
+	}
+	return p.buildResult(media, items), nil
 }
 
 func (p *Provider) querySnapinsta(ctx context.Context, inputURL string) (*downloader.DownloadResult, error) {

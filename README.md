@@ -69,7 +69,7 @@ rest-api/
 │   ├── ratelimit/           # Rate limiter jendela-pendek (Redis + in-memory)
 │   ├── quota/               # Kuota harian/bulanan (Postgres source of truth)
 │   ├── downloader/          # Domain + engine (types, Provider/Resolver interface, Registry, Service)
-│   │   └── providers/       # Adapter platform (facebook, instagram, tiktok, shopee, ninexbuddy)
+│   │   └── providers/       # Adapter platform (facebook, instagram, tiktok, shopee, apple, ninexbuddy)
 │   ├── youtube/             # Layanan YouTube (search, formats, convert) via convert1s
 │   ├── browser/             # Abstraksi browser automation + adapter Playwright
 │   ├── database/            # PostgreSQL: connection pool + migration runner
@@ -145,7 +145,7 @@ curl -o out.mp4 \
 | PATCH  | `/v1/admin/keys/{id}` | implemented | `X-API-Key` + role `admin` | Ubah key (name/status)  |
 | DELETE | `/v1/admin/keys/{id}` | implemented | `X-API-Key` + role `admin` | Cabut key (revoke)      |
 | GET    | `/v1/admin/stats`     | implemented | `X-API-Key` + role `admin` | Statistik platform      |
-| POST   | `/v1/downloads`       | skeleton    | `X-API-Key` wajib   | Resolve/download media (Facebook via fget.io, Instagram official + snapinsta, TikTok official (direct rehydration) + snaptik fallback, Shopee official + shopeenowatermark, 9xbuddy all-in-one fallback, SaveFrom via worker savefrom.net). Format TikTok dikembalikan sebagai URL proxy streaming (bukan CDN langsung) |
+| POST   | `/v1/downloads`       | skeleton    | `X-API-Key` wajib   | Resolve/download media (Facebook via fget.io, Instagram official + snapinsta, TikTok official (direct rehydration) + snaptik fallback, Shopee official + shopeenowatermark, Apple Music via aapl + aplmate, 9xbuddy all-in-one fallback, SaveFrom via worker savefrom.net). Format TikTok dikembalikan sebagai URL proxy streaming (bukan CDN langsung) |
 | GET    | `/v1/downloads/proxy` | implemented | `X-API-Key` wajib   | Streaming proxy: server yang ambil media (dengan cookie/header upstream) lalu stream byte-nya ke klien. Param: `url`, `type` (`video`/`audio`/`image`, default `video`), `index` (format ke-n, default `0`) |
 | GET    | `/v1/youtube/search`  | implemented | `X-API-Key` wajib   | Cari video YouTube (param `q`)         |
 | GET    | `/v1/youtube/formats` | implemented | `X-API-Key` wajib   | Katalog format konversi YouTube        |

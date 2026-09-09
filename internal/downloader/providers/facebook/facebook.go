@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"rest-api/internal/downloader"
+	"rest-api/internal/downloader/providers/snapx"
 )
 
 const (
@@ -36,14 +37,18 @@ type Config struct {
 	Locale string
 
 	HTTPClient *http.Client
+
+	SnapXEnabled bool
+	SnapX        *snapx.Client
 }
 
 func DefaultConfig() Config {
 	return Config{
-		BaseURL:   defaultBaseURL,
-		Timeout:   30 * time.Second,
-		UserAgent: defaultUserAgent,
-		Locale:    defaultLocale,
+		BaseURL:      defaultBaseURL,
+		Timeout:      30 * time.Second,
+		UserAgent:    defaultUserAgent,
+		Locale:       defaultLocale,
+		SnapXEnabled: true,
 	}
 }
 
@@ -52,6 +57,7 @@ type Provider struct {
 	userAgent string
 	locale    string
 	client    *http.Client
+	snapx     *snapx.Client
 }
 
 var _ downloader.Provider = (*Provider)(nil)
@@ -79,12 +85,20 @@ func NewWithConfig(cfg Config) *Provider {
 	if client == nil {
 		client = &http.Client{Timeout: cfg.Timeout}
 	}
-	return &Provider{
+	p := &Provider{
 		baseURL:   strings.TrimRight(cfg.BaseURL, "/"),
 		userAgent: cfg.UserAgent,
 		locale:    cfg.Locale,
 		client:    client,
 	}
+	if cfg.SnapXEnabled {
+		if cfg.SnapX != nil {
+			p.snapx = cfg.SnapX
+		} else {
+			p.snapx = snapx.NewWithConfig(snapx.Config{HTTPClient: client, Timeout: cfg.Timeout})
+		}
+	}
+	return p
 }
 
 func (p *Provider) Name() string { return "facebook" }
@@ -129,21 +143,33 @@ func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) 
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
+		if fallback, ferr := p.querySnapX(ctx, req.URL); ferr == nil {
+			return fallback, nil
+		}
 		return nil, classifyClientError(err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
+		if fallback, ferr := p.querySnapX(ctx, req.URL); ferr == nil {
+			return fallback, nil
+		}
 		return nil, classifyClientError(err)
 	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		if fallback, ferr := p.querySnapX(ctx, req.URL); ferr == nil {
+			return fallback, nil
+		}
 		return nil, classifyHTTPStatus(resp.StatusCode)
 	}
 
 	result, err := p.parse(body)
 	if err != nil {
+		if fallback, ferr := p.querySnapX(ctx, req.URL); ferr == nil {
+			return fallback, nil
+		}
 		return nil, err
 	}
 	result.Platform = downloader.PlatformFacebook
@@ -151,6 +177,13 @@ func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) 
 		result.URL = req.URL
 	}
 	return result, nil
+}
+
+func (p *Provider) querySnapX(ctx context.Context, mediaURL string) (*downloader.DownloadResult, error) {
+	if p.snapx == nil {
+		return nil, downloader.ErrMediaNotFound
+	}
+	return p.snapx.Facebook(ctx, mediaURL)
 }
 
 func (p *Provider) applyHeaders(r *http.Request) {

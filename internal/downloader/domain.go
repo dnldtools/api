@@ -5,13 +5,17 @@ import "strings"
 type Platform string
 
 const (
-	PlatformFacebook  Platform = "facebook"
-	PlatformInstagram Platform = "instagram"
-	PlatformTikTok    Platform = "tiktok"
-	PlatformShopee    Platform = "shopee"
-	PlatformYouTube   Platform = "youtube"
-	Platform9xbuddy   Platform = "9xbuddy"
-	PlatformSavefrom  Platform = "savefrom"
+	PlatformFacebook   Platform = "facebook"
+	PlatformInstagram  Platform = "instagram"
+	PlatformTikTok     Platform = "tiktok"
+	PlatformShopee     Platform = "shopee"
+	PlatformApple      Platform = "apple"
+	PlatformUCShare    Platform = "uc-share"
+	PlatformDoodstream Platform = "doodstream"
+	PlatformPinterest  Platform = "pinterest"
+	PlatformYouTube    Platform = "youtube"
+	Platform9xbuddy    Platform = "9xbuddy"
+	PlatformSavefrom   Platform = "savefrom"
 )
 
 type MediaType string

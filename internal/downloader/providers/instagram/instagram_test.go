@@ -164,6 +164,39 @@ func TestResolveOfficialEmbeddedVideo(t *testing.T) {
 	}
 }
 
+func TestResolveOfficialEmbedFallback(t *testing.T) {
+	pageBody := strings.Repeat("x", 400) + `"code":"abc12"`
+
+	embedBody := `<html><script type="text/javascript">window.__additionalDataLoaded('extra', {"shortcode_media":{"media_type":2,"video_url":"https://cdn.example.com/v.mp4","display_url":"https://cdn.example.com/t.jpg","owner":{"username":"alice"},"caption":"Embed cap"}});</script></html>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "embed") {
+			_, _ = w.Write([]byte(embedBody))
+			return
+		}
+		_, _ = w.Write([]byte(pageBody))
+	}))
+	defer srv.Close()
+
+	p := NewWithConfig(Config{RelayBaseURL: srv.URL, SnapinstaBaseURL: srv.URL})
+	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testPostURL})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if result.Title != "Embed cap" {
+		t.Errorf("Title = %q, want Embed cap", result.Title)
+	}
+	if len(result.Formats) != 1 {
+		t.Fatalf("len(Formats) = %d, want 1", len(result.Formats))
+	}
+	if result.Formats[0].Type != downloader.MediaVideo || result.Formats[0].URL != "https://cdn.example.com/v.mp4" {
+		t.Errorf("Formats[0] = %+v, want video / v.mp4", result.Formats[0])
+	}
+	if got := result.Metadata["author"]; got != "alice" {
+		t.Errorf("Metadata author = %q, want alice", got)
+	}
+}
+
 func TestResolveOfficialGraphQLFallback(t *testing.T) {
 	pageBody := strings.Repeat("x", 400) + `"code":"abc12"`
 

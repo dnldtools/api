@@ -2,12 +2,16 @@ package providers
 
 import (
 	"rest-api/internal/downloader"
+	"rest-api/internal/downloader/providers/apple"
+	"rest-api/internal/downloader/providers/doodstream"
 	"rest-api/internal/downloader/providers/facebook"
 	"rest-api/internal/downloader/providers/instagram"
 	"rest-api/internal/downloader/providers/ninexbuddy"
+	"rest-api/internal/downloader/providers/pinterest"
 	"rest-api/internal/downloader/providers/savefrom"
 	"rest-api/internal/downloader/providers/shopee"
 	"rest-api/internal/downloader/providers/tiktok"
+	"rest-api/internal/downloader/providers/ucshare"
 	"rest-api/internal/downloader/providers/youtube"
 )
 
@@ -21,6 +25,10 @@ func RegisterAll(registry *downloader.Registry, opts ...Options) error {
 		instagram.NewWithConfig(instagram.Config{InstagramCookie: o.InstagramCookie}),
 		tiktok.New(),
 		shopee.New(),
+		apple.New(),
+		ucshare.New(),
+		doodstream.New(),
+		pinterest.New(),
 		// YouTube claims its own URLs so they are routed to the dedicated
 		// /v1/youtube/* endpoints instead of the generic fallback below.
 		youtube.New(),

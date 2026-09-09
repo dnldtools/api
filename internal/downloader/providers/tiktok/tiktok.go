@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"rest-api/internal/downloader"
+	"rest-api/internal/downloader/providers/snapx"
 )
 
 const (
@@ -54,6 +55,9 @@ type Config struct {
 	UserAgent string
 
 	HTTPClient *http.Client
+
+	SnapXEnabled bool
+	SnapX        *snapx.Client
 }
 
 func DefaultConfig() Config {
@@ -63,6 +67,7 @@ func DefaultConfig() Config {
 		SnaptikAPIURL:   defaultSnaptikAPI,
 		Timeout:         30 * time.Second,
 		UserAgent:       defaultUserAgent,
+		SnapXEnabled:    true,
 	}
 }
 
@@ -74,6 +79,7 @@ type Provider struct {
 	userAgent    string
 	allowedHosts []string
 	client       *http.Client
+	snapx        *snapx.Client
 }
 
 var _ downloader.Provider = (*Provider)(nil)
@@ -105,7 +111,7 @@ func NewWithConfig(cfg Config) *Provider {
 		jar, _ := cookiejar.New(nil)
 		client = &http.Client{Timeout: cfg.Timeout, Jar: jar}
 	}
-	return &Provider{
+	p := &Provider{
 		relay:        strings.TrimRight(cfg.RelayBaseURL, "/"),
 		officialBase: strings.TrimRight(cfg.OfficialBaseURL, "/"),
 		resolveBase:  strings.TrimRight(cfg.ResolveBaseURL, "/"),
@@ -114,6 +120,14 @@ func NewWithConfig(cfg Config) *Provider {
 		allowedHosts: cfg.AllowedMediaHosts,
 		client:       client,
 	}
+	if cfg.SnapXEnabled {
+		if cfg.SnapX != nil {
+			p.snapx = cfg.SnapX
+		} else {
+			p.snapx = snapx.NewWithConfig(snapx.Config{HTTPClient: client, Timeout: cfg.Timeout})
+		}
+	}
+	return p
 }
 
 func (p *Provider) Name() string { return "tiktok" }
@@ -167,6 +181,18 @@ func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) 
 		snapRes.Platform = downloader.PlatformTikTok
 		snapRes.URL = resolved
 		return snapRes, nil
+	}
+
+	if p.snapx != nil {
+		sxRes, sxErr := p.snapx.TikTok(ctx, resolved)
+		if sxErr == nil && sxRes != nil && len(sxRes.Formats) > 0 {
+			sxRes.Platform = downloader.PlatformTikTok
+			sxRes.URL = resolved
+			return sxRes, nil
+		}
+		if sxErr != nil {
+			snapErr = sxErr
+		}
 	}
 
 	if snapErr != nil {
