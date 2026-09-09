@@ -92,3 +92,31 @@ func TestRateLimitMiddlewareErrorFailsOpen(t *testing.T) {
 		t.Error("handler should have been called when the limiter fails")
 	}
 }
+
+func TestRateLimitMiddlewareSkipsAdmin(t *testing.T) {
+	errHandler := NewErrorHandler(slog.Default())
+	// A limiter that would deny any non-admin request.
+	limiter := &fakeLimiter{result: ratelimit.Result{Allowed: false, RetryAfter: 30 * time.Second}}
+	called := false
+
+	h := chain(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusOK)
+		}),
+		authMiddleware(&fakeAuthenticator{}, errHandler),
+		rateLimitMiddleware(limiter, plans.Defaults(), errHandler),
+	)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/downloads", nil)
+	req.Header.Set("X-API-Key", adminTestAPIKey)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (admin bypasses rate limit)", rec.Code, http.StatusOK)
+	}
+	if !called {
+		t.Error("handler should have been called for an admin key")
+	}
+}

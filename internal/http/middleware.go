@@ -255,6 +255,12 @@ func rateLimitMiddleware(limiter ratelimit.Limiter, policies plans.PolicySet, er
 				return
 			}
 
+			// Admin keys bypass rate limiting entirely.
+			if identity.Role == auth.RoleAdmin {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			policy := policies.Get(identity.Plan)
 			if policy.RateLimit <= 0 {
 				next.ServeHTTP(w, r)
@@ -289,6 +295,12 @@ func quotaMiddleware(svc quota.Service, errHandler *ErrorHandler) Middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			identity, ok := identityFromContext(r.Context())
 			if !ok || svc == nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Admin keys bypass quota checks and usage recording.
+			if identity.Role == auth.RoleAdmin {
 				next.ServeHTTP(w, r)
 				return
 			}

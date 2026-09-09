@@ -101,3 +101,36 @@ func TestQuotaMiddlewareCheckErrorIsInternal(t *testing.T) {
 		t.Errorf("error.code = %q, want INTERNAL_ERROR", got)
 	}
 }
+
+func TestQuotaMiddlewareSkipsAdmin(t *testing.T) {
+	errHandler := NewErrorHandler(slog.Default())
+	// A quota service that would deny any non-admin request.
+	q := &fakeQuota{checkFn: func(context.Context, int64, plans.Plan) (quota.Result, error) {
+		return quota.Result{Allowed: false, DailyRemaining: 0}, nil
+	}}
+	called := false
+
+	h := chain(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusOK)
+		}),
+		authMiddleware(&fakeAuthenticator{}, errHandler),
+		quotaMiddleware(q, errHandler),
+	)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/downloads", nil)
+	req.Header.Set("X-API-Key", adminTestAPIKey)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (admin bypasses quota)", rec.Code, http.StatusOK)
+	}
+	if !called {
+		t.Error("handler should have been called for an admin key")
+	}
+	if recorded := q.snapshot(); len(recorded) != 0 {
+		t.Errorf("recorded %d quota calls for admin, want 0", len(recorded))
+	}
+}
