@@ -23,13 +23,14 @@ const (
 type Code string
 
 const (
-	CodeValidationError     Code = "VALIDATION_ERROR"
-	CodeInvalidRequest      Code = "INVALID_REQUEST"
-	CodeInvalidURL          Code = "INVALID_URL"
-	CodeInvalidJSON         Code = "INVALID_JSON"
-	CodeMissingParameter    Code = "MISSING_PARAMETER"
-	CodeUnsupportedPlatform Code = "UNSUPPORTED_PLATFORM"
-	CodeFormatNotAvailable  Code = "FORMAT_NOT_AVAILABLE"
+	CodeValidationError         Code = "VALIDATION_ERROR"
+	CodeInvalidRequest          Code = "INVALID_REQUEST"
+	CodeInvalidURL              Code = "INVALID_URL"
+	CodeInvalidJSON             Code = "INVALID_JSON"
+	CodeMissingParameter        Code = "MISSING_PARAMETER"
+	CodeUnsupportedPlatform     Code = "UNSUPPORTED_PLATFORM"
+	CodeYouTubeSeparateEndpoint Code = "YOUTUBE_SEPARATE_ENDPOINT"
+	CodeFormatNotAvailable      Code = "FORMAT_NOT_AVAILABLE"
 
 	CodeAuthenticationRequired Code = "AUTHENTICATION_REQUIRED"
 	CodeInvalidAPIKey          Code = "INVALID_API_KEY"

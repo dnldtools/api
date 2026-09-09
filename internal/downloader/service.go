@@ -3,6 +3,12 @@ package downloader
 import (
 	"context"
 	"errors"
+	"time"
+)
+
+const (
+	defaultResolveTimeout = 45 * time.Second
+	defaultCacheTTL       = 10 * time.Minute
 )
 
 type Downloader interface {
@@ -14,6 +20,16 @@ type Downloader interface {
 type Service struct {
 	resolver PlatformResolver
 	registry *Registry
+
+	// cache is an optional result cache. When set, successful resolves are
+	// stored (and served) keyed by platform + URL. A nil cache is a no-op.
+	cache    ResultCache
+	cacheTTL time.Duration
+
+	// resolveTimeout bounds the whole Resolve call (platform detection + one
+	// provider). It must stay below the HTTP server WriteTimeout so requests do
+	// not outlive the socket deadline. Zero falls back to defaultResolveTimeout.
+	resolveTimeout time.Duration
 }
 
 func NewService(registry *Registry) *Service {
@@ -21,7 +37,24 @@ func NewService(registry *Registry) *Service {
 }
 
 func NewServiceWithResolver(resolver PlatformResolver, registry *Registry) *Service {
-	return &Service{resolver: resolver, registry: registry}
+	return &Service{
+		resolver:       resolver,
+		registry:       registry,
+		cacheTTL:       defaultCacheTTL,
+		resolveTimeout: defaultResolveTimeout,
+	}
+}
+
+// SetCache enables result caching. ttl <= 0 falls back to defaultCacheTTL.
+func (s *Service) SetCache(c ResultCache, ttl time.Duration) {
+	s.cache = c
+	s.cacheTTL = ttl
+}
+
+// SetResolveTimeout overrides the per-request resolve deadline. d <= 0 falls
+// back to defaultResolveTimeout.
+func (s *Service) SetResolveTimeout(d time.Duration) {
+	s.resolveTimeout = d
 }
 
 func (s *Service) Registry() *Registry {
@@ -37,9 +70,23 @@ func (s *Service) Resolve(ctx context.Context, req DownloadRequest) (*DownloadRe
 		return nil, err
 	}
 
-	platform, err := s.resolver.ResolvePlatform(ctx, req)
+	timeout := s.resolveTimeout
+	if timeout <= 0 {
+		timeout = defaultResolveTimeout
+	}
+	resolveCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	platform, err := s.resolver.ResolvePlatform(resolveCtx, req)
 	if err != nil {
 		return nil, err
+	}
+
+	key := CacheKey{Platform: platform, URL: req.URL}
+	if s.cache != nil {
+		if cached, ok := s.cache.Get(resolveCtx, key); ok {
+			return cached, nil
+		}
 	}
 
 	provider, err := s.registry.Get(platform)
@@ -55,7 +102,7 @@ func (s *Service) Resolve(ctx context.Context, req DownloadRequest) (*DownloadRe
 
 	req.Platform = platform
 
-	result, err := provider.Resolve(ctx, req)
+	result, err := provider.Resolve(resolveCtx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -69,6 +116,21 @@ func (s *Service) Resolve(ctx context.Context, req DownloadRequest) (*DownloadRe
 	if result.URL == "" {
 		result.URL = req.URL
 	}
+
+	if s.cache != nil {
+		ttl := s.cacheTTL
+		if ttl <= 0 {
+			ttl = defaultCacheTTL
+		}
+		// Cache under the request URL and, when the provider canonicalised it
+		// (e.g. TikTok short link -> canonical URL), also under the canonical
+		// URL so the streaming-proxy path hits the cache without re-scraping.
+		_ = s.cache.Set(ctx, key, result, ttl)
+		if result.URL != "" && result.URL != req.URL {
+			_ = s.cache.Set(ctx, CacheKey{Platform: platform, URL: result.URL}, result, ttl)
+		}
+	}
+
 	return result, nil
 }
 

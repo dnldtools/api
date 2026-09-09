@@ -60,6 +60,7 @@ func New(cfg *config.Config, logger *slog.Logger) (*Application, error) {
 		return nil, fmt.Errorf("app: register providers: %w", err)
 	}
 	a.downloader = downloader.NewService(registry)
+	a.downloader.SetResolveTimeout(cfg.ResolveTimeout)
 	a.youtube = youtube.New()
 
 	if cfg.Browser.Enabled {
@@ -108,6 +109,7 @@ func New(cfg *config.Config, logger *slog.Logger) (*Application, error) {
 			logger.Warn("redis unavailable; continuing without cache", "error", err)
 		} else {
 			a.redis = r
+			a.downloader.SetCache(downloader.NewRedisResultCache(a.redis.Client()), cfg.ResolveCacheTTL)
 			logger.Info("redis ready")
 		}
 	}

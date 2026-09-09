@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"rest-api/internal/downloader"
@@ -31,7 +32,15 @@ const (
 
 	defaultTimeout = 30 * time.Second
 
-	defaultTicketTimeout = 90 * time.Second
+	// defaultTicketTimeout bounds the per-format ticket polling loop. It must
+	// stay well below the HTTP server WriteTimeout (60s) so a slow ticket can
+	// never outlive the response socket. 90s was longer than the server could
+	// actually wait, so requests died mid-poll anyway.
+	defaultTicketTimeout = 20 * time.Second
+
+	// maxTicketPollAttempts caps the number of polling iterations per ticket as
+	// a hard backstop even when the timeout hasn't been hit yet.
+	maxTicketPollAttempts = 12
 
 	maxResponseBytes = 5 << 20
 )
@@ -376,12 +385,26 @@ type resolvedMedia struct {
 	Source string
 }
 
+// materializeFormats resolves each format's ticket into a direct media URL.
+// Format tickets are independent, so they are resolved concurrently with a
+// bounded worker pool instead of one-after-another. Each goroutine only mutates
+// its own format map, so there is no data race; the shared *session is read-only
+// at this point.
 func (p *Provider) materializeFormats(ctx context.Context, data map[string]interface{}, s *session) error {
 	resp := asMap(data["response"])
 	if resp == nil {
 		resp = data
 	}
 	formats := sliceOf(resp["formats"])
+
+	const maxConcurrency = 4
+	sem := make(chan struct{}, maxConcurrency)
+
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		first error
+	)
 
 	for _, item := range formats {
 		m := asMap(item)
@@ -396,24 +419,45 @@ func (p *Provider) materializeFormats(ctx context.Context, data map[string]inter
 
 		m["ticket"] = "/download/" + uid + "/" + ticketURL
 
-		resolved, err := p.resolveTicket(ctx, downloadTicket{uid: uid, url: ticketURL}, s)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			m["downloadable"] = false
-			m["download_error"] = err.Error()
-			continue
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-		if resolved != nil && resolved.URL != "" {
-			m["url"] = resolved.URL
-			if resolved.Size > 0 {
-				m["size"] = float64(resolved.Size)
+
+		wg.Add(1)
+		go func(m map[string]interface{}, uid, ticketURL string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			resolved, err := p.resolveTicket(ctx, downloadTicket{uid: uid, url: ticketURL}, s)
+			if err != nil {
+				if ctx.Err() != nil {
+					mu.Lock()
+					if first == nil {
+						first = ctx.Err()
+					}
+					mu.Unlock()
+					return
+				}
+				m["downloadable"] = false
+				m["download_error"] = err.Error()
+				return
 			}
-			m["downloadable"] = true
-		}
+			if resolved != nil && resolved.URL != "" {
+				m["url"] = resolved.URL
+				if resolved.Size > 0 {
+					m["size"] = float64(resolved.Size)
+				}
+				m["downloadable"] = true
+			}
+		}(m, uid, ticketURL)
 	}
-	return nil
+
+	wg.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	return first
 }
 
 func (p *Provider) resolveTicket(ctx context.Context, ticket downloadTicket, s *session) (*resolvedMedia, error) {
@@ -424,8 +468,8 @@ func (p *Provider) resolveTicket(ctx context.Context, ticket downloadTicket, s *
 	mode := "inspect"
 	var preparedUID string
 
-	for {
-		if time.Since(started) >= p.ticketTimeout {
+	for attempts := 0; ; attempts++ {
+		if time.Since(started) >= p.ticketTimeout || attempts >= maxTicketPollAttempts {
 			return nil, downloader.ErrProviderTimeout
 		}
 

@@ -56,6 +56,8 @@ type Provider struct {
 
 var _ downloader.Provider = (*Provider)(nil)
 
+var _ downloader.URLMatcher = (*Provider)(nil)
+
 func New() *Provider {
 	return NewWithConfig(DefaultConfig())
 }
@@ -90,6 +92,25 @@ func (p *Provider) Name() string { return "facebook" }
 func (p *Provider) Platform() downloader.Platform { return downloader.PlatformFacebook }
 
 func (p *Provider) Type() downloader.ProviderType { return downloader.ProviderExternalAPI }
+
+// MatchesURL claims Facebook URLs so they no longer fall through to the
+// generic 9xbuddy fallback.
+func (p *Provider) MatchesURL(u string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(u))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" {
+		return false
+	}
+	for _, suffix := range []string{"facebook.com", "fb.com", "fb.watch", "fbwat.ch"} {
+		if host == suffix || strings.HasSuffix(host, "."+suffix) {
+			return true
+		}
+	}
+	return false
+}
 
 func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) (*downloader.DownloadResult, error) {
 	if strings.TrimSpace(req.URL) == "" {

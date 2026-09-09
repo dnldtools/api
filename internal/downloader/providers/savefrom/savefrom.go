@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dop251/goja"
@@ -39,11 +40,16 @@ const (
 
 	defaultTimeout = 30 * time.Second
 
-	defaultConverterTimeout = 45 * time.Second
+	// defaultConverterTimeout bounds the sf-converter SSE polling. It must sit
+	// comfortably below the HTTP server WriteTimeout (60s).
+	defaultConverterTimeout = 30 * time.Second
 
 	defaultJSTimeout = 8 * time.Second
 
-	defaultMaxAttempts = 5
+	// defaultMaxAttempts caps endpoint/profile rotation. 5 serial attempts (each
+	// with a 30s timeout + 8s JS eval) could take minutes; 3 is a reasonable
+	// reliability/latency trade-off.
+	defaultMaxAttempts = 3
 
 	maxResponseBytes = 5 << 20
 )
@@ -313,24 +319,74 @@ func (p *Provider) buildScrapeData(ctx context.Context, raw interface{}, inputUR
 	}
 
 	listed := pickDirectFiles(item)
-	files := make([]mediaFile, 0, len(listed))
-	for _, f := range listed {
-		if f.Kind == "converter" {
-			if resolved, err := p.resolveConverter(ctx, f.URL); err == nil {
-				files = append(files, mediaFile{
-					Kind:      "direct",
-					Quality:   orFirst(resolved.Quality, f.Quality),
-					Ext:       f.Ext,
-					MediaType: f.MediaType,
-					HasAudio:  true,
-					Itag:      f.Itag,
-					Filesize:  f.Filesize,
-					URL:       resolved.URL,
-				})
-				continue
-			}
+	files := make([]mediaFile, len(listed))
+
+	// Converter jobs are independent upstream conversions: run them with bounded
+	// concurrency instead of serially. Order is preserved by index.
+	type converterResult struct {
+		index int
+		file  mediaFile
+		ok    bool
+	}
+	const maxConverterConcurrency = 3
+	sem := make(chan struct{}, maxConverterConcurrency)
+	results := make(chan converterResult, len(listed))
+	var wg sync.WaitGroup
+
+	for i, f := range listed {
+		if f.Kind != "converter" {
+			files[i] = f
+			continue
 		}
-		files = append(files, f)
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		wg.Add(1)
+		go func(i int, f mediaFile) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if resolved, err := p.resolveConverter(ctx, f.URL); err == nil {
+				results <- converterResult{
+					index: i,
+					ok:    true,
+					file: mediaFile{
+						Kind:      "direct",
+						Quality:   orFirst(resolved.Quality, f.Quality),
+						Ext:       f.Ext,
+						MediaType: f.MediaType,
+						HasAudio:  true,
+						Itag:      f.Itag,
+						Filesize:  f.Filesize,
+						URL:       resolved.URL,
+					},
+				}
+			}
+		}(i, f)
+	}
+
+	wg.Wait()
+	close(results)
+	for r := range results {
+		if r.ok {
+			files[r.index] = r.file
+		}
+	}
+
+	// A converter that failed keeps its original placeholder entry, matching
+	// the previous serial behaviour.
+	for i, f := range listed {
+		if f.Kind == "converter" && files[i].Kind != "direct" {
+			files[i] = f
+		}
+	}
+
+	out := files[:0]
+	for _, f := range files {
+		if f.URL != "" {
+			out = append(out, f)
+		}
 	}
 
 	meta := asMap(item["meta"])
@@ -340,7 +396,7 @@ func (p *Provider) buildScrapeData(ctx context.Context, raw interface{}, inputUR
 		Source:   orFirst(asText(meta["source"]), inputURL),
 		Duration: asText(meta["duration"]),
 		Thumb:    asText(item["thumb"]),
-		Files:    files,
+		Files:    out,
 	}, nil
 }
 

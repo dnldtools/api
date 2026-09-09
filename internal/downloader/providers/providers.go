@@ -8,6 +8,7 @@ import (
 	"rest-api/internal/downloader/providers/savefrom"
 	"rest-api/internal/downloader/providers/shopee"
 	"rest-api/internal/downloader/providers/tiktok"
+	"rest-api/internal/downloader/providers/youtube"
 )
 
 func RegisterAll(registry *downloader.Registry, opts ...Options) error {
@@ -20,6 +21,9 @@ func RegisterAll(registry *downloader.Registry, opts ...Options) error {
 		instagram.NewWithConfig(instagram.Config{InstagramCookie: o.InstagramCookie}),
 		tiktok.New(),
 		shopee.New(),
+		// YouTube claims its own URLs so they are routed to the dedicated
+		// /v1/youtube/* endpoints instead of the generic fallback below.
+		youtube.New(),
 		// 9xbuddy is an all-in-one fallback: registered last so dedicated
 		// providers above still win for their own URLs.
 		ninexbuddy.New(),

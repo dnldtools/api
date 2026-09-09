@@ -35,6 +35,8 @@ func mapError(err error) *apperrors.AppError {
 		return apperrors.MediaNotFound("We couldn't find that media. It may be private or removed.").WithCause(err)
 	case stderrors.Is(err, downloader.ErrStreamUnsupported):
 		return apperrors.NotImplemented(apperrors.CodeNotImplemented, "Streaming isn't supported for this platform.").WithCause(err)
+	case stderrors.Is(err, downloader.ErrYouTubeSeparateEndpoint):
+		return apperrors.Validation(apperrors.CodeYouTubeSeparateEndpoint, "YouTube links are handled by the dedicated YouTube endpoints. Use /v1/youtube/search, /v1/youtube/formats, or /v1/youtube/convert instead.").WithCause(err)
 
 	case stderrors.Is(err, youtube.ErrInvalidURL):
 		return apperrors.Validation(apperrors.CodeInvalidURL, "Please provide a valid link.").WithCause(err)

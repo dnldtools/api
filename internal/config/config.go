@@ -37,6 +37,14 @@ type Config struct {
 	IdleTimeout     time.Duration
 	ShutdownTimeout time.Duration
 
+	// ResolveTimeout bounds a single downloader resolve (platform detection +
+	// one provider). It must stay below HTTP WriteTimeout.
+	ResolveTimeout time.Duration
+
+	// ResolveCacheTTL is how long a successfully resolved result is cached in
+	// Redis (when Redis is enabled).
+	ResolveCacheTTL time.Duration
+
 	PrettyJSON bool
 	LogLevel   string
 
@@ -67,6 +75,8 @@ func Load() (*Config, error) {
 		PrettyJSON:      env.GetBool("PRETTY_JSON", false),
 		LogLevel:        env.Get("LOG_LEVEL", "info"),
 		ShutdownTimeout: env.GetDuration("SHUTDOWN_TIMEOUT", 10*time.Second),
+		ResolveTimeout:  env.GetDuration("RESOLVE_TIMEOUT", 45*time.Second),
+		ResolveCacheTTL: env.GetDuration("RESOLVE_CACHE_TTL", 10*time.Minute),
 
 		Browser: browser.Config{
 			Enabled:        env.GetBool("BROWSER_ENABLED", false),

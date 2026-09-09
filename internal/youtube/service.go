@@ -21,7 +21,7 @@ const (
 	defaultMeta        = "https://yt-meta.convert1s.com"
 	defaultUserAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 	defaultReqTimeout  = 20 * time.Second
-	defaultPollTimeout = 5 * time.Minute
+	defaultPollTimeout = 2 * time.Minute
 	defaultPollEvery   = 1500 * time.Millisecond
 	maxResponseBytes   = 2 << 20
 )

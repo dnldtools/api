@@ -9,6 +9,7 @@ const (
 	PlatformInstagram Platform = "instagram"
 	PlatformTikTok    Platform = "tiktok"
 	PlatformShopee    Platform = "shopee"
+	PlatformYouTube   Platform = "youtube"
 	Platform9xbuddy   Platform = "9xbuddy"
 	PlatformSavefrom  Platform = "savefrom"
 )
