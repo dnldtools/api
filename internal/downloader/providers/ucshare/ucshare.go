@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"rest-api/internal/downloader"
+
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -24,6 +26,8 @@ const (
 	origin     = "https://drive.ucweb.com"
 	maxBody    = 8 << 20
 	pageSize   = 100
+
+	mediaResolveConcurrency = 24
 )
 
 type Config struct {
@@ -160,23 +164,31 @@ func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) 
 	}
 
 	top := listItems(root)
-	var files []ucFile
-	if len(top) > 0 && allDirs(top) {
-		for _, dir := range top {
-			nested, werr := p.walk(ctx, pwd, stoken, dir.Name, dir.FID)
-			if werr != nil {
-				return nil, werr
+	items, err := p.collect(ctx, pwd, stoken, title, top)
+	if err != nil {
+		return nil, err
+	}
+
+	files := make([]ucFile, len(items))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(mediaResolveConcurrency)
+	for i, item := range items {
+		i, item := i, item
+		g.Go(func() error {
+			dl, preview, dur, _ := p.mediaURL(gctx, pwd, stoken, item.FID, item.Token)
+			files[i] = ucFile{
+				Name:       item.Name,
+				Size:       item.Size,
+				Kind:       firstNonEmpty(item.Format, item.Category),
+				Download:   dl,
+				Preview:    preview,
+				DurationMs: dur,
 			}
-			for i := range nested {
-				nested[i].Name = dir.Name + "/" + nested[i].Name
-			}
-			files = append(files, nested...)
-		}
-	} else {
-		files, err = p.walk(ctx, pwd, stoken, title, "")
-		if err != nil {
-			return nil, err
-		}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 
 	formats := make([]downloader.Format, 0, len(files))
@@ -256,16 +268,34 @@ type ucFile struct {
 	DurationMs int64
 }
 
-func (p *Provider) walk(ctx context.Context, pwd, stoken, _ string, pdirFID string) ([]ucFile, error) {
+func (p *Provider) collect(ctx context.Context, pwd, stoken, rootName string, top []ucItem) ([]ucItem, error) {
+	if len(top) > 0 && allDirs(top) {
+		var out []ucItem
+		for _, dir := range top {
+			nested, err := p.collectDir(ctx, pwd, stoken, dir.FID)
+			if err != nil {
+				return nil, err
+			}
+			for i := range nested {
+				nested[i].Name = dir.Name + "/" + nested[i].Name
+			}
+			out = append(out, nested...)
+		}
+		return out, nil
+	}
+	return p.collectDir(ctx, pwd, stoken, "")
+}
+
+func (p *Provider) collectDir(ctx context.Context, pwd, stoken, pdirFID string) ([]ucItem, error) {
 	data, err := p.listDir(ctx, pwd, pdirFID, stoken)
 	if err != nil {
 		return nil, err
 	}
 	items := listItems(data)
-	out := make([]ucFile, 0, len(items))
+	out := make([]ucItem, 0, len(items))
 	for _, item := range items {
 		if item.Dir {
-			nested, err := p.walk(ctx, pwd, stoken, item.Name, item.FID)
+			nested, err := p.collectDir(ctx, pwd, stoken, item.FID)
 			if err != nil {
 				return nil, err
 			}
@@ -278,15 +308,7 @@ func (p *Provider) walk(ctx context.Context, pwd, stoken, _ string, pdirFID stri
 		if !isMedia(item) {
 			continue
 		}
-		dl, preview, dur, _ := p.mediaURL(ctx, pwd, stoken, item.FID, item.Token)
-		out = append(out, ucFile{
-			Name:       item.Name,
-			Size:       item.Size,
-			Kind:       firstNonEmpty(item.Format, item.Category),
-			Download:   dl,
-			Preview:    preview,
-			DurationMs: dur,
-		})
+		out = append(out, item)
 	}
 	return out, nil
 }
