@@ -673,3 +673,85 @@ func TestPickBestPlayURLPrefersHighestBitrate(t *testing.T) {
 		t.Errorf("pickBestPlayURL() = %q, want high.mp4", got)
 	}
 }
+
+func TestParseShortDramaURL(t *testing.T) {
+	cases := []struct {
+		in      string
+		dramaID string
+		episode int
+	}{
+		{"https://www.tiktok.com/shortdrama/episode/7660053695581361172/1", "7660053695581361172", 1},
+		{"https://www.tiktok.com/shortdrama/episode/7660053695581361172/85", "7660053695581361172", 85},
+		{"https://www.tiktok.com/shortdrama/detail/7660053695581361172", "7660053695581361172", 0},
+		{"https://www.tiktok.com/shortdrama/7660053695581361172", "7660053695581361172", 0},
+		{"https://www.tiktok.com/@alice/video/123", "", 0},
+	}
+	for _, c := range cases {
+		id, ep := parseShortDramaURL(c.in)
+		if id != c.dramaID || ep != c.episode {
+			t.Errorf("parseShortDramaURL(%q) = (%q, %d), want (%q, %d)", c.in, id, ep, c.dramaID, c.episode)
+		}
+	}
+	if !isShortDramaURL("https://www.tiktok.com/shortdrama/episode/7660053695581361172/1") {
+		t.Error("isShortDramaURL() = false, want true")
+	}
+	if isShortDramaURL("https://www.tiktok.com/@alice/video/123") {
+		t.Error("isShortDramaURL() = true, want false")
+	}
+}
+
+func TestResolveShortDramaEpisode(t *testing.T) {
+	var gotDramaID, gotCursor string
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/drama/episode/item_list/":
+			gotDramaID = r.URL.Query().Get("dramaID")
+			gotCursor = r.URL.Query().Get("cursor")
+			_, _ = w.Write([]byte(`{"statusCode":0,"cursor":"1","hasMore":true,"totalEpisodeCount":"85","itemList":[{"id":"1234567890","desc":"My Drama","author":{"id":"1","uniqueId":"alice","nickname":"Alice"},"video":{"cover":"https://cdn.example.com/cover.jpg"},"dramaInfo":{"authorUID":"1","description":"Synopsis","cover":{"urlList":["https://cdn.example.com/drama.jpg"]},"DramaVideoData":{"EpisodeNumber":1,"IsPreview":true}}}]}`))
+		case strings.HasPrefix(r.URL.Path, "/@alice/video/"):
+			_, _ = w.Write([]byte(rehydrationPage(videoItem("Hello world", "https://cdn.example.com/v.mp4"))))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer relay.Close()
+
+	p := NewWithConfig(Config{RelayBaseURL: relay.URL, OfficialBaseURL: relay.URL, DramaAPIBase: relay.URL, NativeEnabled: false, TikwmEnabled: false, SnapXEnabled: false})
+	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: "https://www.tiktok.com/shortdrama/episode/7660053695581361172/1"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if gotDramaID != "7660053695581361172" {
+		t.Errorf("dramaID query = %q, want 7660053695581361172", gotDramaID)
+	}
+	if gotCursor != "0" {
+		t.Errorf("cursor query = %q, want 0", gotCursor)
+	}
+	if result.Platform != downloader.PlatformTikTok {
+		t.Errorf("Platform = %q, want tiktok", result.Platform)
+	}
+	if result.Title != "My Drama - Episode 1" {
+		t.Errorf("Title = %q, want My Drama - Episode 1", result.Title)
+	}
+	if result.Thumbnail != "https://cdn.example.com/cover.jpg" {
+		t.Errorf("Thumbnail = %q, want cover.jpg", result.Thumbnail)
+	}
+	if len(result.Formats) != 1 || result.Formats[0].URL != "https://cdn.example.com/v.mp4" {
+		t.Fatalf("Formats = %+v, want single v.mp4", result.Formats)
+	}
+	if result.Metadata["drama_id"] != "7660053695581361172" {
+		t.Errorf("Metadata drama_id = %q, want 7660053695581361172", result.Metadata["drama_id"])
+	}
+	if result.Metadata["drama_episode"] != "1" {
+		t.Errorf("Metadata drama_episode = %q, want 1", result.Metadata["drama_episode"])
+	}
+	if result.Metadata["drama_episode_count"] != "85" {
+		t.Errorf("Metadata drama_episode_count = %q, want 85", result.Metadata["drama_episode_count"])
+	}
+	if result.Metadata["drama_creator"] != "Alice" {
+		t.Errorf("Metadata drama_creator = %q, want Alice", result.Metadata["drama_creator"])
+	}
+	if result.Metadata["source"] != "tiktok_shortdrama" {
+		t.Errorf("Metadata source = %q, want tiktok_shortdrama", result.Metadata["source"])
+	}
+}

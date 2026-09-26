@@ -26,6 +26,9 @@ const (
 	defaultSnaptikAPI   = "https://snaptik.net/api/ajaxSearch"
 	defaultOfficialBase = "https://www.tiktok.com"
 	defaultTikwmBase    = "https://www.tikwm.com"
+	defaultDramaAPIBase = "https://www.tiktok.com"
+	dramaAPIPath        = "/api/drama/episode/item_list/"
+	dramaTimeout        = 15 * time.Second
 	defaultUserAgent    = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 	officialUserAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36 Edg/152.0.0.0"
 	nativeUserAgent     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
@@ -42,6 +45,8 @@ type Config struct {
 	// OfficialBaseURL overrides the base URL used for the direct official
 	// rehydration fetch. Defaults to https://www.tiktok.com; intended for tests.
 	OfficialBaseURL string
+
+	DramaAPIBase string
 
 	// ResolveBaseURL, when set, is used instead of a direct fetch to resolve
 	// tiktok short links (intended for tests).
@@ -101,6 +106,7 @@ func DefaultConfig() Config {
 type Provider struct {
 	relay        string
 	officialBase string
+	dramaAPIBase string
 	resolveBase  string
 	snaptikAPI   string
 	userAgent    string
@@ -145,6 +151,9 @@ func NewWithConfig(cfg Config) *Provider {
 	if cfg.TikwmBaseURL == "" {
 		cfg.TikwmBaseURL = defaultTikwmBase
 	}
+	if cfg.DramaAPIBase == "" {
+		cfg.DramaAPIBase = defaultDramaAPIBase
+	}
 	client := cfg.HTTPClient
 	if client == nil {
 		jar, _ := cookiejar.New(nil)
@@ -153,6 +162,7 @@ func NewWithConfig(cfg Config) *Provider {
 	p := &Provider{
 		relay:        strings.TrimRight(cfg.RelayBaseURL, "/"),
 		officialBase: strings.TrimRight(cfg.OfficialBaseURL, "/"),
+		dramaAPIBase: strings.TrimRight(cfg.DramaAPIBase, "/"),
 		resolveBase:  strings.TrimRight(cfg.ResolveBaseURL, "/"),
 		snaptikAPI:   cfg.SnaptikAPIURL,
 		userAgent:    cfg.UserAgent,
@@ -207,11 +217,19 @@ func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) 
 		return nil, downloader.ErrInvalidURL
 	}
 
+	if isShortDramaURL(inputURL) {
+		return p.queryShortDrama(ctx, inputURL)
+	}
+
 	resolved, err := p.resolveTikTokURL(ctx, inputURL)
 	if err != nil {
 		return nil, err
 	}
 
+	return p.resolveMedia(ctx, resolved)
+}
+
+func (p *Provider) resolveMedia(ctx context.Context, resolved string) (*downloader.DownloadResult, error) {
 	if p.nativeEnabled {
 		if nativeRes, nerr := p.queryNativeSSR(ctx, resolved); nerr == nil && nativeRes != nil && len(nativeRes.Formats) > 0 {
 			nativeRes.Platform = downloader.PlatformTikTok
@@ -220,7 +238,6 @@ func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) 
 		}
 	}
 
-	// Official rehydration is the first fallback after the native SSR parser.
 	offRes, offErr := p.queryOfficial(ctx, resolved)
 	if offErr == nil && offRes != nil && len(offRes.Formats) > 0 {
 		offRes.Platform = downloader.PlatformTikTok
@@ -259,6 +276,183 @@ func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) 
 		return nil, snapErr
 	}
 	return nil, offErr
+}
+
+func (p *Provider) queryShortDrama(ctx context.Context, dramaURL string) (*downloader.DownloadResult, error) {
+	dramaID, episodeNum := parseShortDramaURL(dramaURL)
+	if dramaID == "" {
+		return nil, downloader.ErrInvalidURL
+	}
+
+	episode, totalEpisodes, err := p.fetchShortDramaEpisode(ctx, dramaID, episodeNum)
+	if err != nil {
+		return nil, err
+	}
+	if episode.ID == "" || episode.Author.UniqueID == "" {
+		return nil, downloader.ErrMediaNotFound
+	}
+
+	videoURL := "https://www.tiktok.com/@" + episode.Author.UniqueID + "/video/" + episode.ID
+	res, err := p.resolveMedia(ctx, videoURL)
+	if err != nil {
+		return nil, err
+	}
+	if res == nil {
+		res = &downloader.DownloadResult{}
+	}
+	res.Platform = downloader.PlatformTikTok
+	res.URL = dramaURL
+	if episode.Desc != "" {
+		if n := episode.DramaInfo.DramaVideoData.EpisodeNumber; n > 0 {
+			res.Title = episode.Desc + " - Episode " + strconv.Itoa(n)
+		} else {
+			res.Title = episode.Desc
+		}
+	}
+	if cover := orStr(episode.Video.Cover, episode.Video.OriginCover, firstURL(episode.DramaInfo.Cover.URLList)); cover != "" {
+		res.Thumbnail = cover
+	}
+	if res.Metadata == nil {
+		res.Metadata = map[string]string{}
+	}
+	res.Metadata["source"] = "tiktok_shortdrama"
+	res.Metadata["drama_id"] = dramaID
+	res.Metadata["drama_episode"] = strconv.Itoa(episode.DramaInfo.DramaVideoData.EpisodeNumber)
+	if totalEpisodes > 0 {
+		res.Metadata["drama_episode_count"] = strconv.Itoa(totalEpisodes)
+	}
+	if episode.DramaInfo.Description != "" {
+		res.Metadata["drama_description"] = episode.DramaInfo.Description
+	}
+	if episode.Author.Nickname != "" {
+		res.Metadata["drama_creator"] = episode.Author.Nickname
+	}
+	if episode.DramaInfo.AuthorUID != "" {
+		res.Metadata["drama_author_uid"] = episode.DramaInfo.AuthorUID
+	}
+	return res, nil
+}
+
+func (p *Provider) fetchShortDramaEpisode(ctx context.Context, dramaID string, episodeNum int) (*dramaEpisodeItem, int, error) {
+	q := url.Values{}
+	q.Set("aid", "1988")
+	q.Set("device_platform", "web")
+	q.Set("browser_language", "en-US")
+	q.Set("browser_name", "Mozilla")
+	q.Set("browser_version", "152.0.0.0")
+	q.Set("os", "windows")
+	q.Set("dramaID", dramaID)
+	cursor := 0
+	if episodeNum > 0 {
+		cursor = episodeNum - 1
+	}
+	q.Set("cursor", strconv.Itoa(cursor))
+	q.Set("count", "1")
+
+	body, _, status, err := p.do(ctx, http.MethodGet, p.dramaAPIBase+dramaAPIPath+"?"+q.Encode(), map[string]string{
+		"user-agent": officialUserAgent,
+		"accept":     "application/json, text/plain, */*",
+		"referer":    "https://www.tiktok.com/",
+	}, nil, dramaTimeout)
+	if err != nil {
+		return nil, 0, err
+	}
+	if status < http.StatusOK || status >= http.StatusMultipleChoices {
+		return nil, 0, classifyHTTPStatus(status)
+	}
+
+	var parsed dramaEpisodeResponse
+	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
+		return nil, 0, stderrors.Join(downloader.ErrProviderInvalidResponse, err)
+	}
+	if parsed.StatusCode != 0 || len(parsed.ItemList) == 0 {
+		return nil, 0, downloader.ErrMediaNotFound
+	}
+	total, _ := strconv.Atoi(parsed.TotalEpisodeCount)
+	return &parsed.ItemList[0], total, nil
+}
+
+func isShortDramaURL(u string) bool {
+	return strings.Contains(strings.ToLower(u), "/shortdrama/")
+}
+
+func parseShortDramaURL(u string) (string, int) {
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return "", 0
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	for i := 0; i < len(parts); i++ {
+		if parts[i] != "shortdrama" || i+1 >= len(parts) {
+			continue
+		}
+		if parts[i+1] == "episode" && i+2 < len(parts) {
+			ep := 0
+			if i+3 < len(parts) {
+				if n, err := strconv.Atoi(parts[i+3]); err == nil {
+					ep = n
+				}
+			}
+			return parts[i+2], ep
+		}
+		if parts[i+1] == "detail" && i+2 < len(parts) {
+			return parts[i+2], 0
+		}
+		return parts[i+1], 0
+	}
+	return "", 0
+}
+
+type dramaEpisodeResponse struct {
+	Cursor            string             `json:"cursor"`
+	HasMore           bool               `json:"hasMore"`
+	StatusCode        int                `json:"statusCode"`
+	TotalEpisodeCount string             `json:"totalEpisodeCount"`
+	ItemList          []dramaEpisodeItem `json:"itemList"`
+}
+
+type dramaEpisodeItem struct {
+	ID        string             `json:"id"`
+	Desc      string             `json:"desc"`
+	Author    dramaEpisodeAuthor `json:"author"`
+	Video     dramaEpisodeVideo  `json:"video"`
+	DramaInfo dramaEpisodeInfo   `json:"dramaInfo"`
+}
+
+type dramaEpisodeAuthor struct {
+	ID       string `json:"id"`
+	UniqueID string `json:"uniqueId"`
+	Nickname string `json:"nickname"`
+}
+
+type dramaEpisodeVideo struct {
+	Cover       string `json:"cover"`
+	OriginCover string `json:"originCover"`
+}
+
+type dramaEpisodeInfo struct {
+	Description    string         `json:"description"`
+	AuthorUID      string         `json:"authorUID"`
+	Cover          dramaCoverList `json:"cover"`
+	DramaVideoData dramaVideoData `json:"DramaVideoData"`
+}
+
+type dramaCoverList struct {
+	URLList []string `json:"urlList"`
+}
+
+type dramaVideoData struct {
+	EpisodeNumber int  `json:"EpisodeNumber"`
+	IsPreview     bool `json:"IsPreview"`
+}
+
+func firstURL(list []string) string {
+	for _, s := range list {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func (p *Provider) resolveTikTokURL(ctx context.Context, inputURL string) (string, error) {
