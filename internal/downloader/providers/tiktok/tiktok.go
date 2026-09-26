@@ -225,6 +225,9 @@ func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) 
 	if err != nil {
 		return nil, err
 	}
+	if isShortDramaURL(resolved) {
+		return p.queryShortDrama(ctx, resolved)
+	}
 
 	return p.resolveMedia(ctx, resolved)
 }
