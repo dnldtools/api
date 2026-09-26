@@ -16,6 +16,8 @@ const (
 	PlatformYouTube    Platform = "youtube"
 	Platform9xbuddy    Platform = "9xbuddy"
 	PlatformSavefrom   Platform = "savefrom"
+	PlatformX          Platform = "x"
+	PlatformThreads    Platform = "threads"
 )
 
 type MediaType string

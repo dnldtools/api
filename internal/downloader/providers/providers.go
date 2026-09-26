@@ -10,8 +10,10 @@ import (
 	"rest-api/internal/downloader/providers/pinterest"
 	"rest-api/internal/downloader/providers/savefrom"
 	"rest-api/internal/downloader/providers/shopee"
+	"rest-api/internal/downloader/providers/threads"
 	"rest-api/internal/downloader/providers/tiktok"
 	"rest-api/internal/downloader/providers/ucshare"
+	"rest-api/internal/downloader/providers/x"
 	"rest-api/internal/downloader/providers/youtube"
 )
 
@@ -39,6 +41,8 @@ func RegisterAll(registry *downloader.Registry, opts ...Options) error {
 		ucshare.New(),
 		doodstream.New(),
 		pinterest.New(),
+		x.New(),
+		threads.New(),
 		// YouTube claims its own URLs so they are routed to the dedicated
 		// /v1/youtube/* endpoints instead of the generic fallback below.
 		youtube.New(),
