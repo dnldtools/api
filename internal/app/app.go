@@ -173,6 +173,7 @@ func New(cfg *config.Config, logger *slog.Logger) (*Application, error) {
 		Downloader:    a.downloader,
 		Youtube:       a.youtube,
 		PublicBaseURL: cfg.PublicBaseURL,
+		DocsAPIKey:    cfg.DocsAPIKey,
 		Metrics:       a.metrics,
 		Auth:          authSvc,
 		Keys:          keySvc,

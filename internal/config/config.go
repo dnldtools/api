@@ -40,6 +40,11 @@ type Config struct {
 	// native TikTok SSR fetch.
 	TikTokCookie string
 
+	// DocsAPIKey is an optional dnld.app API key (ra_...) that gets pre-filled
+	// into the Scalar API reference client so the Test Request feature can call
+	// the API without the reader pasting a key manually.
+	DocsAPIKey string
+
 	ReadTimeout     time.Duration
 	WriteTimeout    time.Duration
 	IdleTimeout     time.Duration
@@ -79,6 +84,7 @@ func Load() (*Config, error) {
 		InstagramCookie: env.Get("INSTAGRAM_COOKIE", ""),
 		FacebookCookie:  env.Get("FACEBOOK_COOKIE", ""),
 		TikTokCookie:    env.Get("TIKTOK_COOKIE", ""),
+		DocsAPIKey:      env.Get("DOCS_API_KEY", ""),
 		ReadTimeout:     env.GetDuration("HTTP_READ_TIMEOUT", 30*time.Second),
 		WriteTimeout:    env.GetDuration("HTTP_WRITE_TIMEOUT", 60*time.Second),
 		IdleTimeout:     env.GetDuration("HTTP_IDLE_TIMEOUT", 60*time.Second),

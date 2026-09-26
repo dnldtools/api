@@ -23,6 +23,9 @@ type Dependencies struct {
 	// streaming-proxy links). Empty means derive from the request.
 	PublicBaseURL string
 
+	// DocsAPIKey is optionally pre-filled into the Scalar docs API client.
+	DocsAPIKey string
+
 	Metrics *metrics.Service
 
 	Auth auth.Authenticator
@@ -118,10 +121,10 @@ func NewRouter(deps Dependencies) http.Handler {
 	mux.HandleFunc("GET /favicon.ico", handleFavicon())
 	mux.HandleFunc("GET /favicon.png", handleFavicon())
 
-	mux.HandleFunc("GET /{$}", handleDocs(errHandler))
-	mux.HandleFunc("GET /openapi.json", handleDocs(errHandler))
-	mux.HandleFunc("GET /llms.txt", handleDocs(errHandler))
-	mux.HandleFunc("GET /llm.txt", handleDocs(errHandler))
+	mux.HandleFunc("GET /{$}", handleDocs(errHandler, deps.DocsAPIKey))
+	mux.HandleFunc("GET /openapi.json", handleDocs(errHandler, deps.DocsAPIKey))
+	mux.HandleFunc("GET /llms.txt", handleDocs(errHandler, deps.DocsAPIKey))
+	mux.HandleFunc("GET /llm.txt", handleDocs(errHandler, deps.DocsAPIKey))
 
 	mux.HandleFunc("/", handleNotFound(errHandler))
 
