@@ -565,3 +565,111 @@ func TestStreamMediaSendsHeadersAndStreamsBody(t *testing.T) {
 		t.Errorf("body = %q, want streamed-bytes", string(body))
 	}
 }
+
+func TestResolveNativeSSR(t *testing.T) {
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(rehydrationPage(videoItem("Native title", "https://cdn.example.com/native.mp4"))))
+	}))
+	defer relay.Close()
+
+	p := NewWithConfig(Config{NativeEnabled: true, OfficialBaseURL: relay.URL})
+	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testVideoURL})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if result.Platform != downloader.PlatformTikTok {
+		t.Errorf("Platform = %q, want tiktok", result.Platform)
+	}
+	if result.Title != "Native title" {
+		t.Errorf("Title = %q, want Native title", result.Title)
+	}
+	if result.Type != downloader.MediaVideo {
+		t.Errorf("Type = %q, want video", result.Type)
+	}
+	if len(result.Formats) != 1 || result.Formats[0].URL != "https://cdn.example.com/native.mp4" {
+		t.Fatalf("Formats = %+v, want native.mp4", result.Formats)
+	}
+	if result.Metadata["source"] != "tiktok_native_ssr" {
+		t.Errorf("Metadata source = %q, want tiktok_native_ssr", result.Metadata["source"])
+	}
+	if result.Metadata["id"] != "1234567890" {
+		t.Errorf("Metadata id = %q, want 1234567890", result.Metadata["id"])
+	}
+	if result.Metadata["author"] != "alice" {
+		t.Errorf("Metadata author = %q, want alice", result.Metadata["author"])
+	}
+}
+
+func TestResolveTikwmFallback(t *testing.T) {
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("no rehydration here ", 40)))
+	}))
+	defer relay.Close()
+
+	tikwm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/" {
+			t.Errorf("TikWM path = %q, want /api/", r.URL.Path)
+		}
+		payload := `{"code":0,"msg":"success","data":{` +
+			`"id":"1234567890","title":"TikWM Video",` +
+			`"author":{"id":"u1","unique_id":"alice","nickname":"Alice","avatar":"https://av.example/a.jpg"},` +
+			`"music_info":{"id":"m1","title":"Song","author":"Artist","play":"https://tikwm.example/m.mp3"},` +
+			`"digg_count":100,"comment_count":5,"share_count":2,"play_count":1000,"collect_count":7,` +
+			`"duration":15,"cover":"https://cv.example/c.jpg","hdplay":"https://cdn.example/hd.mp4","images":[]}}`
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer tikwm.Close()
+
+	p := NewWithConfig(Config{OfficialBaseURL: relay.URL, TikwmEnabled: true, TikwmBaseURL: tikwm.URL})
+	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testVideoURL})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if result.Title != "TikWM Video" {
+		t.Errorf("Title = %q, want TikWM Video", result.Title)
+	}
+	if len(result.Formats) != 2 {
+		t.Fatalf("len(Formats) = %d, want 2 (video + audio)", len(result.Formats))
+	}
+	if result.Formats[0].Type != downloader.MediaVideo || result.Formats[0].URL != "https://cdn.example/hd.mp4" {
+		t.Errorf("Formats[0] = %+v, want video hd.mp4", result.Formats[0])
+	}
+	if result.Formats[1].Type != downloader.MediaAudio || result.Formats[1].URL != "https://tikwm.example/m.mp3" {
+		t.Errorf("Formats[1] = %+v, want audio m.mp3", result.Formats[1])
+	}
+	if result.DurationMs != 15000 {
+		t.Errorf("DurationMs = %d, want 15000", result.DurationMs)
+	}
+	if result.Metadata["author"] != "alice" {
+		t.Errorf("Metadata author = %q, want alice", result.Metadata["author"])
+	}
+	if result.Metadata["likes"] != "100" {
+		t.Errorf("Metadata likes = %q, want 100", result.Metadata["likes"])
+	}
+	if result.Metadata["music_title"] != "Song" {
+		t.Errorf("Metadata music_title = %q, want Song", result.Metadata["music_title"])
+	}
+}
+
+func TestPickBestPlayURLPrefersHighestBitrate(t *testing.T) {
+	video := map[string]interface{}{
+		"bitrateInfo": []interface{}{
+			map[string]interface{}{
+				"Bitrate":  float64(500000),
+				"PlayAddr": map[string]interface{}{"UrlList": []interface{}{"https://cdn.example.com/low.mp4"}},
+			},
+			map[string]interface{}{
+				"Bitrate":  float64(5000000),
+				"PlayAddr": map[string]interface{}{"UrlList": []interface{}{"https://cdn.example.com/high.mp4"}},
+			},
+			map[string]interface{}{
+				"Bitrate":  float64(2000000),
+				"PlayAddr": map[string]interface{}{"UrlList": []interface{}{"https://cdn.example.com/mid.mp4"}},
+			},
+		},
+	}
+	if got := pickBestPlayURL(video); got != "https://cdn.example.com/high.mp4" {
+		t.Errorf("pickBestPlayURL() = %q, want high.mp4", got)
+	}
+}

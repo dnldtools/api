@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	stderrors "errors"
+	"html"
 	"io"
 	"net"
 	"net/http"
@@ -36,6 +37,10 @@ const (
 	defaultIGUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36"
 
 	defaultBrowserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+	defaultNativeBase = "https://www.instagram.com"
+
+	defaultNativeUA = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
 
 	defaultAppID = "936619743392459"
 
@@ -76,6 +81,20 @@ type Config struct {
 	// DefaultConfig enables it; tests using NewWithConfig stay off unless set.
 	SnapXEnabled bool
 	SnapX        *snapx.Client
+
+	// NativeEnabled turns on the direct instagram.com fetch with a Googlebot
+	// User-Agent (the primary scraper ported from the Instagram all-in-one
+	// script). DefaultConfig enables it; tests keep it off unless set so they
+	// stay hermetic.
+	NativeEnabled bool
+
+	// NativeBaseURL overrides the instagram.com origin used by the native
+	// fetch (intended for tests).
+	NativeBaseURL string
+
+	// NativeUA is the User-Agent used by the native fetch (defaults to a
+	// Googlebot UA, which makes Instagram serve SSR JSON to anonymous clients).
+	NativeUA string
 }
 
 func DefaultConfig() Config {
@@ -88,6 +107,9 @@ func DefaultConfig() Config {
 		IGUserAgent:       defaultIGUA,
 		BrowserUserAgent:  defaultBrowserUA,
 		SnapXEnabled:      true,
+		NativeEnabled:     true,
+		NativeBaseURL:     defaultNativeBase,
+		NativeUA:          defaultNativeUA,
 	}
 }
 
@@ -101,6 +123,10 @@ type Provider struct {
 	igCookie       string
 	client         *http.Client
 	snapx          *snapx.Client
+
+	nativeEnabled bool
+	nativeBase    string
+	nativeUA      string
 }
 
 var _ downloader.Provider = (*Provider)(nil)
@@ -133,6 +159,12 @@ func NewWithConfig(cfg Config) *Provider {
 	if cfg.BrowserUserAgent == "" {
 		cfg.BrowserUserAgent = defaultBrowserUA
 	}
+	if cfg.NativeBaseURL == "" {
+		cfg.NativeBaseURL = defaultNativeBase
+	}
+	if cfg.NativeUA == "" {
+		cfg.NativeUA = defaultNativeUA
+	}
 	client := cfg.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: cfg.Timeout}
@@ -146,6 +178,10 @@ func NewWithConfig(cfg Config) *Provider {
 		browserUA:      cfg.BrowserUserAgent,
 		igCookie:       strings.TrimSpace(cfg.InstagramCookie),
 		client:         client,
+
+		nativeEnabled: cfg.NativeEnabled,
+		nativeBase:    strings.TrimRight(cfg.NativeBaseURL, "/"),
+		nativeUA:      cfg.NativeUA,
 	}
 	if cfg.SnapXEnabled {
 		if cfg.SnapX != nil {
@@ -188,13 +224,19 @@ func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) 
 			func(ctx context.Context) (*downloader.DownloadResult, error) { return p.queryInstasave(ctx, inputURL) },
 		}
 	} else {
-		strategies = []func(context.Context) (*downloader.DownloadResult, error){
+		strategies = []func(context.Context) (*downloader.DownloadResult, error){}
+		if p.nativeEnabled {
+			strategies = append(strategies, func(ctx context.Context) (*downloader.DownloadResult, error) {
+				return p.queryNative(ctx, shortcode)
+			})
+		}
+		strategies = append(strategies,
 			func(ctx context.Context) (*downloader.DownloadResult, error) {
 				return p.queryOfficial(ctx, inputURL, shortcode)
 			},
 			func(ctx context.Context) (*downloader.DownloadResult, error) { return p.queryInstasave(ctx, inputURL) },
 			func(ctx context.Context) (*downloader.DownloadResult, error) { return p.querySnapinsta(ctx, inputURL) },
-		}
+		)
 	}
 	if p.snapx != nil {
 		strategies = append(strategies, func(ctx context.Context) (*downloader.DownloadResult, error) {
@@ -225,6 +267,198 @@ func (p *Provider) querySnapX(ctx context.Context, inputURL string) (*downloader
 		return nil, downloader.ErrMediaNotFound
 	}
 	return p.snapx.Instagram(ctx, inputURL)
+}
+
+func (p *Provider) queryNative(ctx context.Context, shortcode string) (*downloader.DownloadResult, error) {
+	if shortcode == "" {
+		return nil, downloader.ErrMediaNotFound
+	}
+
+	pageURL := p.nativeBase + "/p/" + shortcode + "/"
+	body, status, err := p.do(ctx, http.MethodGet, pageURL, map[string]string{
+		"user-agent":      p.nativeUA,
+		"accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+		"accept-language": "en-US,en;q=0.9,id;q=0.8",
+	}, nil, nil, 10*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusNotFound {
+		return nil, downloader.ErrMediaNotFound
+	}
+	if status < http.StatusOK || status >= http.StatusMultipleChoices || len(body) < 200 {
+		return nil, classifyHTTPStatus(status)
+	}
+
+	media := findShortcodeMedia(body, shortcode)
+	if media == nil {
+		return p.buildNativeFromOG(body, shortcode)
+	}
+
+	items := itemsFromOfficial(media)
+	if len(items) == 0 {
+		return nil, downloader.ErrMediaNotFound
+	}
+	return p.buildResult(media, items), nil
+}
+
+// findShortcodeMedia extracts the `shortcode_media` object from a rendered
+// Instagram post page. It mirrors the all-in-one script: try the polaris media
+// JSON, then the embed-style extra payload, then a generic deep search over
+// every JSON object in script tags for the first media node.
+func findShortcodeMedia(htmlText, shortcode string) map[string]interface{} {
+	marker := `"code":"` + shortcode + `"`
+	if idx := strings.Index(htmlText, marker); idx != -1 {
+		if key := strings.LastIndex(htmlText[:idx], `"xig_polaris_media":`); key != -1 {
+			data := extractJSONObject(htmlText, key)
+			if inner, ok := data["if_not_gated_logged_out"].(map[string]interface{}); ok {
+				return inner
+			}
+			return data
+		}
+	}
+
+	if idx := strings.Index(htmlText, `__additionalDataLoaded('extra'`); idx != -1 {
+		data := extractJSONObject(htmlText, idx)
+		if media := asMap(data["shortcode_media"]); media != nil {
+			return media
+		}
+		if items := sliceOf(data["items"]); len(items) > 0 {
+			if m := asMap(items[0]); m != nil {
+				return m
+			}
+		}
+	}
+
+	var candidates []map[string]interface{}
+	for _, block := range extractJSONBlocks(htmlText) {
+		deepFindIG(block, 0, &candidates)
+	}
+	return selectIGMedia(candidates, shortcode)
+}
+
+func selectIGMedia(candidates []map[string]interface{}, shortcode string) map[string]interface{} {
+	if len(candidates) == 0 {
+		return nil
+	}
+	if shortcode != "" {
+		for _, c := range candidates {
+			if str(c["shortcode"]) == shortcode {
+				return c
+			}
+		}
+	}
+	for _, c := range candidates {
+		if len(itemsFromOfficial(c)) > 0 {
+			return c
+		}
+	}
+	return candidates[0]
+}
+
+func (p *Provider) buildNativeFromOG(htmlText, shortcode string) (*downloader.DownloadResult, error) {
+	title := collapseSpace(html.UnescapeString(metaContent(htmlText, "og:title")))
+	ogImage := html.UnescapeString(metaContent(htmlText, "og:image"))
+	ogVideo := html.UnescapeString(metaContent(htmlText, "og:video"))
+	if ogVideo == "" {
+		ogVideo = html.UnescapeString(metaContent(htmlText, "og:video:secure_url"))
+	}
+	if ogVideo == "" {
+		ogVideo = html.UnescapeString(metaContent(htmlText, "og:video:url"))
+	}
+
+	var items []mediaItem
+	if ogVideo != "" {
+		items = append(items, mediaItem{kind: "video", url: ogVideo, thumb: ogImage})
+	} else if ogImage != "" {
+		items = append(items, mediaItem{kind: "photo", url: ogImage, thumb: ogImage})
+	}
+	if len(items) == 0 {
+		return nil, downloader.ErrMediaNotFound
+	}
+
+	post := map[string]interface{}{"shortcode": shortcode, "caption": title}
+	return p.buildResult(post, items), nil
+}
+
+func metaContent(htmlText, property string) string {
+	quoted := regexp.QuoteMeta(property)
+	re1 := regexp.MustCompile(`(?is)<meta[^>]+property=["']` + quoted + `["'][^>]+content=["']([^"']*)["']`)
+	if m := re1.FindStringSubmatch(htmlText); m != nil {
+		return m[1]
+	}
+	re2 := regexp.MustCompile(`(?is)<meta[^>]+content=["']([^"']*)["'][^>]+property=["']` + quoted + `["']`)
+	if m := re2.FindStringSubmatch(htmlText); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+func collapseSpace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+func extractJSONBlocks(htmlText string) []map[string]interface{} {
+	var blocks []map[string]interface{}
+	reScript := regexp.MustCompile(`(?is)<script[^>]*>(.*?)</script>`)
+	reAssign := regexp.MustCompile(`(?:=|const|let|var)\s*(\{[\s\S]*?\});`)
+	for _, m := range reScript.FindAllStringSubmatch(htmlText, -1) {
+		text := strings.TrimSpace(m[1])
+		if text == "" {
+			continue
+		}
+		if strings.HasPrefix(text, "{") {
+			if obj, ok := tryJSON(text); ok {
+				blocks = append(blocks, obj)
+			}
+			continue
+		}
+		for _, mm := range reAssign.FindAllStringSubmatch(text, -1) {
+			if obj, ok := tryJSON(mm[1]); ok {
+				blocks = append(blocks, obj)
+			}
+		}
+	}
+	return blocks
+}
+
+func tryJSON(s string) (map[string]interface{}, bool) {
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return nil, false
+	}
+	return m, true
+}
+
+func deepFindIG(node interface{}, depth int, out *[]map[string]interface{}) {
+	if depth > 64 || len(*out) >= 200 {
+		return
+	}
+	switch n := node.(type) {
+	case map[string]interface{}:
+		if isIGMediaCandidate(n) {
+			*out = append(*out, n)
+		}
+		for _, v := range n {
+			deepFindIG(v, depth+1, out)
+		}
+	case []interface{}:
+		for _, v := range n {
+			deepFindIG(v, depth+1, out)
+		}
+	}
+}
+
+func isIGMediaCandidate(m map[string]interface{}) bool {
+	if m == nil {
+		return false
+	}
+	for _, k := range []string{"shortcode", "video_versions", "carousel_media", "edge_sidecar_to_children", "image_versions2"} {
+		if _, ok := m[k]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Provider) queryOfficial(ctx context.Context, inputURL, shortcode string) (*downloader.DownloadResult, error) {
@@ -645,8 +879,8 @@ func buildMetadata(post map[string]interface{}) map[string]string {
 
 	set("caption", captionText(post))
 
-	set("likes", edgeCount(post, "edge_media_preview_like", "edge_liked_by"))
-	set("comments", edgeCount(post, "edge_media_to_comment", "edge_media_to_parent_comment"))
+	set("likes", orStr(edgeCount(post, "edge_media_preview_like", "edge_liked_by"), formatNum(post["like_count"])))
+	set("comments", orStr(edgeCount(post, "edge_media_to_comment", "edge_media_to_parent_comment"), formatNum(post["comment_count"])))
 	set("views", formatNum(post["video_view_count"]))
 	set("plays", formatNum(post["video_play_count"]))
 

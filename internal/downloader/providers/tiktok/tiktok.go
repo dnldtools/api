@@ -13,6 +13,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,12 +25,15 @@ const (
 	defaultRelay        = "https://cors.siputzx.my.id/"
 	defaultSnaptikAPI   = "https://snaptik.net/api/ajaxSearch"
 	defaultOfficialBase = "https://www.tiktok.com"
+	defaultTikwmBase    = "https://www.tikwm.com"
 	defaultUserAgent    = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 	officialUserAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36 Edg/152.0.0.0"
+	nativeUserAgent     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
 	maxResponseBytes    = 5 << 20
 	officialTimeout     = 15 * time.Second
 	snaptikTimeout      = 20 * time.Second
 	resolveURLTimeout   = 15 * time.Second
+	tikwmTimeout        = 15 * time.Second
 )
 
 type Config struct {
@@ -54,6 +58,25 @@ type Config struct {
 
 	UserAgent string
 
+	// NativeEnabled turns on the direct SSR parser (primary scraper ported
+	// from the TikTok all-in-one script). DefaultConfig enables it; tests keep
+	// it off unless set so they stay hermetic.
+	NativeEnabled bool
+
+	// NativeUA is the desktop browser User-Agent used by the native SSR fetch.
+	NativeUA string
+
+	// TikTokCookie is an optional logged-in tiktok.com cookie attached to the
+	// native SSR fetch.
+	TikTokCookie string
+
+	// TikwmEnabled turns on the TikWM API fallback (used after the native and
+	// official scrapers). DefaultConfig enables it; tests keep it off.
+	TikwmEnabled bool
+
+	// TikwmBaseURL overrides the TikWM origin (intended for tests).
+	TikwmBaseURL string
+
 	HTTPClient *http.Client
 
 	SnapXEnabled bool
@@ -67,6 +90,10 @@ func DefaultConfig() Config {
 		SnaptikAPIURL:   defaultSnaptikAPI,
 		Timeout:         30 * time.Second,
 		UserAgent:       defaultUserAgent,
+		NativeEnabled:   true,
+		NativeUA:        nativeUserAgent,
+		TikwmEnabled:    true,
+		TikwmBaseURL:    defaultTikwmBase,
 		SnapXEnabled:    true,
 	}
 }
@@ -80,6 +107,12 @@ type Provider struct {
 	allowedHosts []string
 	client       *http.Client
 	snapx        *snapx.Client
+
+	nativeEnabled bool
+	nativeUA      string
+	ttCookie      string
+	tikwmEnabled  bool
+	tikwmBase     string
 }
 
 var _ downloader.Provider = (*Provider)(nil)
@@ -106,6 +139,12 @@ func NewWithConfig(cfg Config) *Provider {
 	if cfg.UserAgent == "" {
 		cfg.UserAgent = defaultUserAgent
 	}
+	if cfg.NativeUA == "" {
+		cfg.NativeUA = nativeUserAgent
+	}
+	if cfg.TikwmBaseURL == "" {
+		cfg.TikwmBaseURL = defaultTikwmBase
+	}
 	client := cfg.HTTPClient
 	if client == nil {
 		jar, _ := cookiejar.New(nil)
@@ -119,6 +158,12 @@ func NewWithConfig(cfg Config) *Provider {
 		userAgent:    cfg.UserAgent,
 		allowedHosts: cfg.AllowedMediaHosts,
 		client:       client,
+
+		nativeEnabled: cfg.NativeEnabled,
+		nativeUA:      cfg.NativeUA,
+		ttCookie:      strings.TrimSpace(cfg.TikTokCookie),
+		tikwmEnabled:  cfg.TikwmEnabled,
+		tikwmBase:     strings.TrimRight(cfg.TikwmBaseURL, "/"),
 	}
 	if cfg.SnapXEnabled {
 		if cfg.SnapX != nil {
@@ -167,13 +212,28 @@ func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) 
 		return nil, err
 	}
 
-	// Official rehydration is the primary path: it is tried first and only
-	// falls back to snaptik when the official scrape fails.
+	if p.nativeEnabled {
+		if nativeRes, nerr := p.queryNativeSSR(ctx, resolved); nerr == nil && nativeRes != nil && len(nativeRes.Formats) > 0 {
+			nativeRes.Platform = downloader.PlatformTikTok
+			nativeRes.URL = resolved
+			return nativeRes, nil
+		}
+	}
+
+	// Official rehydration is the first fallback after the native SSR parser.
 	offRes, offErr := p.queryOfficial(ctx, resolved)
 	if offErr == nil && offRes != nil && len(offRes.Formats) > 0 {
 		offRes.Platform = downloader.PlatformTikTok
 		offRes.URL = resolved
 		return offRes, nil
+	}
+
+	if p.tikwmEnabled {
+		if twRes, twErr := p.queryTikwm(ctx, resolved); twErr == nil && twRes != nil && len(twRes.Formats) > 0 {
+			twRes.Platform = downloader.PlatformTikTok
+			twRes.URL = resolved
+			return twRes, nil
+		}
 	}
 
 	snapRes, snapErr := p.querySnaptik(ctx, resolved)
@@ -330,6 +390,273 @@ func (p *Provider) queryOfficial(ctx context.Context, target string) (*downloade
 	}
 
 	return p.buildResult(title, cover, orStr(str(author["uniqueId"]), str(author["nickname"])), items), nil
+}
+
+func (p *Provider) queryNativeSSR(ctx context.Context, target string) (*downloader.DownloadResult, error) {
+	fetchURL := p.officialBase + officialPath(target)
+	headers := map[string]string{
+		"user-agent":                p.nativeUA,
+		"accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+		"accept-language":           "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+		"sec-ch-ua":                 `"Chromium";v="135", "Not=A?Brand";v="24", "Google Chrome";v="135"`,
+		"sec-ch-ua-mobile":          "?0",
+		"sec-ch-ua-platform":        `"Windows"`,
+		"sec-fetch-dest":            "document",
+		"sec-fetch-mode":            "navigate",
+		"sec-fetch-site":            "none",
+		"sec-fetch-user":            "?1",
+		"upgrade-insecure-requests": "1",
+	}
+	if p.ttCookie != "" {
+		headers["cookie"] = p.ttCookie
+	}
+
+	body, _, status, err := p.do(ctx, http.MethodGet, fetchURL, headers, nil, officialTimeout)
+	if err != nil {
+		return nil, err
+	}
+	if status < http.StatusOK || status >= http.StatusMultipleChoices || len(body) < 200 {
+		return nil, classifyHTTPStatus(status)
+	}
+
+	var found map[string]interface{}
+	for _, block := range extractJSONBlocks(body) {
+		deepFindTikTok(block, 0, &found)
+		if found != nil {
+			break
+		}
+	}
+	if found == nil {
+		return nil, downloader.ErrMediaNotFound
+	}
+
+	item := found
+	if is, ok := found["itemStruct"].(map[string]interface{}); ok {
+		item = is
+	}
+	if str(item["id"]) == "" && str(item["aweme_id"]) == "" {
+		return nil, downloader.ErrMediaNotFound
+	}
+
+	return p.buildNativeResult(item, target)
+}
+
+func (p *Provider) buildNativeResult(item map[string]interface{}, sourceURL string) (*downloader.DownloadResult, error) {
+	video := asMap(item["video"])
+	author := asMap(item["author"])
+	music := asMap(item["music"])
+	stats := asMap(item["stats"])
+
+	id := orStr(str(item["id"]), str(item["aweme_id"]))
+	desc := orStr(str(item["desc"]), str(item["title"]))
+	if desc == "" {
+		desc = id
+	}
+
+	images := tiktokImages(item)
+	mp4 := pickBestPlayURL(video)
+	mp3 := orStr(str(music["playUrl"]), str(music["play_url"]))
+
+	items := make([]mediaItem, 0, len(images)+2)
+	if mp4 != "" {
+		items = append(items, mediaItem{kind: "video", url: mp4, thumb: orStr(str(video["cover"]), str(video["originCover"]))})
+	}
+	for _, img := range images {
+		items = append(items, mediaItem{kind: "photo", url: img, thumb: img})
+	}
+	if mp3 != "" {
+		items = append(items, mediaItem{kind: "audio", url: mp3})
+	}
+	if len(items) == 0 {
+		return nil, downloader.ErrMediaNotFound
+	}
+
+	cover := orStr(str(video["cover"]), str(video["originCover"]), str(item["cover"]), str(item["originCover"]))
+	if cover == "" && len(images) > 0 {
+		cover = images[0]
+	}
+
+	authorName := orStr(str(author["uniqueId"]), str(author["nickname"]), str(author["unique_id"]), str(author["name"]))
+	res := p.buildResult(desc, cover, "", items)
+
+	metadata := map[string]string{"source": "tiktok_native_ssr"}
+	if authorName != "" {
+		metadata["author"] = authorName
+	}
+	if id != "" {
+		metadata["id"] = id
+	}
+	if avatar := orStr(str(author["avatarLarger"]), str(author["avatarMedium"]), str(author["avatarThumb"]), str(author["avatar_thumb"])); avatar != "" {
+		metadata["author_avatar"] = avatar
+	}
+	if sig := str(author["signature"]); sig != "" {
+		metadata["author_signature"] = sig
+	}
+	if v, ok := author["verified"].(bool); ok && v {
+		metadata["author_verified"] = "true"
+	}
+	if mID := str(music["id"]); mID != "" {
+		metadata["music_id"] = mID
+	}
+	if mTitle := orStr(str(music["title"]), str(music["title_original"])); mTitle != "" {
+		metadata["music_title"] = mTitle
+	}
+	if mAuthor := str(music["authorName"]); mAuthor != "" {
+		metadata["music_author"] = mAuthor
+	}
+	addStats(metadata, stats)
+	res.Metadata = metadata
+
+	if d := num(item["duration"]); d > 0 {
+		res.DurationMs = int64(d * 1000)
+	} else if d := num(video["duration"]); d > 0 {
+		res.DurationMs = int64(d * 1000)
+	}
+	return res, nil
+}
+
+func (p *Provider) queryTikwm(ctx context.Context, target string) (*downloader.DownloadResult, error) {
+	form := url.Values{}
+	form.Set("url", target)
+	form.Set("hd", "1")
+
+	body, _, status, err := p.do(ctx, http.MethodPost, p.tikwmBase+"/api/", map[string]string{
+		"content-type":     "application/x-www-form-urlencoded; charset=UTF-8",
+		"user-agent":       p.userAgent,
+		"accept":           "application/json, text/javascript, */*; q=0.01",
+		"origin":           p.tikwmBase,
+		"referer":          p.tikwmBase + "/",
+		"x-requested-with": "XMLHttpRequest",
+	}, []byte(form.Encode()), tikwmTimeout)
+	if err != nil {
+		return nil, err
+	}
+	if status < http.StatusOK || status >= http.StatusMultipleChoices {
+		return nil, classifyHTTPStatus(status)
+	}
+
+	var parsed tikwmResponse
+	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
+		return nil, stderrors.Join(downloader.ErrProviderInvalidResponse, err)
+	}
+	if parsed.Data.ID == "" && parsed.Data.Play == "" && parsed.Data.HDPlay == "" && len(parsed.Data.Images) == 0 {
+		return nil, downloader.ErrMediaNotFound
+	}
+
+	return p.buildTikwmResult(&parsed), nil
+}
+
+func (p *Provider) buildTikwmResult(parsed *tikwmResponse) *downloader.DownloadResult {
+	d := parsed.Data
+	title := d.Title
+	cover := orStr(d.Cover, d.OriginCover)
+
+	items := make([]mediaItem, 0, len(d.Images)+2)
+	if videoURL := orStr(d.HDPlay, d.Play); videoURL != "" {
+		items = append(items, mediaItem{kind: "video", url: p.tikwmAbsolute(videoURL), thumb: cover})
+	}
+	for _, img := range d.Images {
+		u := p.tikwmAbsolute(img)
+		items = append(items, mediaItem{kind: "photo", url: u, thumb: u})
+	}
+	if musicURL := orStr(d.MusicInfo.Play, d.Music); musicURL != "" {
+		items = append(items, mediaItem{kind: "audio", url: p.tikwmAbsolute(musicURL)})
+	}
+	if len(items) == 0 {
+		return nil
+	}
+
+	authorName := orStr(d.Author.UniqueID, d.Author.Nickname)
+	res := p.buildResult(title, cover, authorName, items)
+	res.DurationMs = d.Duration * 1000
+
+	metadata := map[string]string{"source": "tikwm"}
+	if authorName != "" {
+		metadata["author"] = authorName
+	}
+	if d.Author.ID != "" {
+		metadata["author_id"] = d.Author.ID
+	}
+	if d.Author.Avatar != "" {
+		metadata["author_avatar"] = d.Author.Avatar
+	}
+	if d.ID != "" {
+		metadata["id"] = d.ID
+	}
+	if d.MusicInfo.ID != "" {
+		metadata["music_id"] = d.MusicInfo.ID
+	}
+	if d.MusicInfo.Title != "" {
+		metadata["music_title"] = d.MusicInfo.Title
+	}
+	if d.MusicInfo.Author != "" {
+		metadata["music_author"] = d.MusicInfo.Author
+	}
+	if d.DiggCount > 0 {
+		metadata["likes"] = strconv.FormatInt(d.DiggCount, 10)
+	}
+	if d.CommentCount > 0 {
+		metadata["comments"] = strconv.FormatInt(d.CommentCount, 10)
+	}
+	if d.ShareCount > 0 {
+		metadata["shares"] = strconv.FormatInt(d.ShareCount, 10)
+	}
+	if d.PlayCount > 0 {
+		metadata["plays"] = strconv.FormatInt(d.PlayCount, 10)
+	}
+	if d.CollectCount > 0 {
+		metadata["saves"] = strconv.FormatInt(d.CollectCount, 10)
+	}
+	res.Metadata = metadata
+	return res
+}
+
+type tikwmAuthor struct {
+	ID       string `json:"id"`
+	UniqueID string `json:"unique_id"`
+	Nickname string `json:"nickname"`
+	Avatar   string `json:"avatar"`
+}
+
+type tikwmMusic struct {
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Author   string `json:"author"`
+	Play     string `json:"play"`
+	Cover    string `json:"cover"`
+	Duration int64  `json:"duration"`
+}
+
+type tikwmData struct {
+	ID           string      `json:"id"`
+	Title        string      `json:"title"`
+	Author       tikwmAuthor `json:"author"`
+	MusicInfo    tikwmMusic  `json:"music_info"`
+	Music        string      `json:"music"`
+	DiggCount    int64       `json:"digg_count"`
+	CommentCount int64       `json:"comment_count"`
+	ShareCount   int64       `json:"share_count"`
+	PlayCount    int64       `json:"play_count"`
+	CollectCount int64       `json:"collect_count"`
+	Duration     int64       `json:"duration"`
+	Cover        string      `json:"cover"`
+	OriginCover  string      `json:"origin_cover"`
+	HDPlay       string      `json:"hdplay"`
+	Play         string      `json:"play"`
+	Images       []string    `json:"images"`
+}
+
+type tikwmResponse struct {
+	Code int       `json:"code"`
+	Msg  string    `json:"msg"`
+	Data tikwmData `json:"data"`
+}
+
+func (p *Provider) tikwmAbsolute(u string) string {
+	if u == "" || strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
+		return u
+	}
+	return p.tikwmBase + "/" + strings.TrimPrefix(u, "/")
 }
 
 func (p *Provider) querySnaptik(ctx context.Context, target string) (*downloader.DownloadResult, error) {
@@ -699,6 +1026,189 @@ func pickPlayURL(video map[string]interface{}) string {
 		return str(list[0])
 	}
 	return ""
+}
+
+func pickBestPlayURL(video map[string]interface{}) string {
+	infos := sliceOf(video["bitrateInfo"])
+	if len(infos) > 0 {
+		best := infos[0]
+		bestRate := bitrateOf(best)
+		for _, b := range infos[1:] {
+			if r := bitrateOf(b); r > bestRate {
+				best, bestRate = b, r
+			}
+		}
+		if list := nestedSlice(asMap(best), "PlayAddr", "UrlList"); len(list) > 0 {
+			if u := str(list[0]); u != "" {
+				return u
+			}
+		}
+	}
+	if u := str(video["playAddr"]); u != "" {
+		return u
+	}
+	if u := str(video["downloadAddr"]); u != "" {
+		return u
+	}
+	if list := nestedSlice(video, "PlayAddrStruct", "UrlList"); len(list) > 0 {
+		return str(list[0])
+	}
+	return ""
+}
+
+func bitrateOf(b interface{}) int64 {
+	m := asMap(b)
+	if n, ok := m["Bitrate"].(float64); ok {
+		return int64(n)
+	}
+	if n, ok := m["bitrate"].(float64); ok {
+		return int64(n)
+	}
+	return 0
+}
+
+func extractJSONBlocks(htmlText string) []map[string]interface{} {
+	var blocks []map[string]interface{}
+	reScript := regexp.MustCompile(`(?is)<script[^>]*>(.*?)</script>`)
+	reAssign := regexp.MustCompile(`(?:=|const|let|var)\s*(\{[\s\S]*?\});`)
+	for _, m := range reScript.FindAllStringSubmatch(htmlText, -1) {
+		text := strings.TrimSpace(m[1])
+		if text == "" {
+			continue
+		}
+		if strings.HasPrefix(text, "{") {
+			if obj, ok := tryJSON(text); ok {
+				blocks = append(blocks, obj)
+			}
+			continue
+		}
+		for _, mm := range reAssign.FindAllStringSubmatch(text, -1) {
+			if obj, ok := tryJSON(mm[1]); ok {
+				blocks = append(blocks, obj)
+			}
+		}
+	}
+	return blocks
+}
+
+func tryJSON(s string) (map[string]interface{}, bool) {
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return nil, false
+	}
+	return m, true
+}
+
+func deepFindTikTok(node interface{}, depth int, out *map[string]interface{}) {
+	if *out != nil || depth > 64 {
+		return
+	}
+	switch n := node.(type) {
+	case map[string]interface{}:
+		if isTikTokCandidate(n) {
+			*out = n
+			return
+		}
+		for _, v := range n {
+			deepFindTikTok(v, depth+1, out)
+			if *out != nil {
+				return
+			}
+		}
+	case []interface{}:
+		for _, v := range n {
+			deepFindTikTok(v, depth+1, out)
+			if *out != nil {
+				return
+			}
+		}
+	}
+}
+
+func isTikTokCandidate(m map[string]interface{}) bool {
+	if m == nil {
+		return false
+	}
+	_, hasVideo := m["video"]
+	_, hasAuthor := m["author"]
+	if hasVideo && hasAuthor {
+		return true
+	}
+	if _, ok := m["imagePost"]; ok && hasAuthor {
+		return true
+	}
+	if _, ok := m["aweme_id"]; ok && hasVideo {
+		return true
+	}
+	if is, ok := m["itemStruct"].(map[string]interface{}); ok {
+		if _, ok := is["video"]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func tiktokImages(item map[string]interface{}) []string {
+	var out []string
+	add := func(list []interface{}) {
+		for _, img := range list {
+			if u := imageURL(img); u != "" {
+				out = append(out, u)
+			}
+		}
+	}
+	add(nestedSlice(item, "imagePost", "images"))
+	add(nestedSlice(item, "image_post_info", "images"))
+	add(sliceOf(item["images"]))
+	return out
+}
+
+func imageURL(img interface{}) string {
+	if s, ok := img.(string); ok {
+		return s
+	}
+	m := asMap(img)
+	for _, k := range []string{"imageURL", "displayImage"} {
+		if list := nestedSlice(m, k, "urlList"); len(list) > 0 {
+			if u := str(list[0]); u != "" {
+				return u
+			}
+		}
+	}
+	if list := sliceOf(m["urlList"]); len(list) > 0 {
+		return str(list[0])
+	}
+	return ""
+}
+
+func addStats(m map[string]string, stats map[string]interface{}) {
+	pairs := []struct{ key, label string }{
+		{"diggCount", "likes"},
+		{"commentCount", "comments"},
+		{"shareCount", "shares"},
+		{"playCount", "plays"},
+		{"collectCount", "saves"},
+	}
+	for _, p := range pairs {
+		if v, ok := stats[p.key]; ok && v != nil {
+			if s := formatCount(v); s != "" {
+				m[p.label] = s
+			}
+		}
+	}
+}
+
+func formatCount(v interface{}) string {
+	switch n := v.(type) {
+	case float64:
+		return strconv.FormatInt(int64(n), 10)
+	case json.Number:
+		return n.String()
+	case string:
+		return n
+	default:
+		return ""
+	}
 }
 
 var (

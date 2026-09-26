@@ -20,10 +20,20 @@ func RegisterAll(registry *downloader.Registry, opts ...Options) error {
 	if len(opts) > 0 {
 		o = opts[0]
 	}
+
+	fbCfg := facebook.DefaultConfig()
+	fbCfg.FacebookCookie = o.FacebookCookie
+
+	igCfg := instagram.DefaultConfig()
+	igCfg.InstagramCookie = o.InstagramCookie
+
+	ttCfg := tiktok.DefaultConfig()
+	ttCfg.TikTokCookie = o.TikTokCookie
+
 	for _, p := range []downloader.Provider{
-		facebook.New(),
-		instagram.NewWithConfig(instagram.Config{InstagramCookie: o.InstagramCookie}),
-		tiktok.New(),
+		facebook.NewWithConfig(fbCfg),
+		instagram.NewWithConfig(igCfg),
+		tiktok.NewWithConfig(ttCfg),
 		shopee.New(),
 		apple.New(),
 		ucshare.New(),
@@ -53,4 +63,12 @@ type Options struct {
 	// InstagramCookie is a logged-in Instagram session cookie used to unlock
 	// the official GraphQL path for full metadata.
 	InstagramCookie string
+
+	// FacebookCookie is a logged-in facebook.com cookie attached to the
+	// native Facebook fetch.
+	FacebookCookie string
+
+	// TikTokCookie is a logged-in tiktok.com cookie attached to the native
+	// TikTok SSR fetch.
+	TikTokCookie string
 }

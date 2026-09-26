@@ -360,3 +360,83 @@ func TestResolveSendsScriptHeadersAndForm(t *testing.T) {
 		t.Errorf("form locale = %q, want id", got.formLocale)
 	}
 }
+
+func TestResolveNativeVideo(t *testing.T) {
+	htmlBody := `<html><head>
+<meta property="og:title" content="My &amp; Reel Title">
+<meta property="og:description" content="A cool reel">
+<meta property="og:image" content="https://scontent.example/t.jpg">
+<script>window.data = {"browser_native_hd_url":"https:\/\/video.example\/hd.mp4","browser_native_sd_url":"https:\/\/video.example\/sd.mp4"}</script>
+</head></html>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(htmlBody))
+	}))
+	defer srv.Close()
+
+	p := NewWithConfig(Config{NativeEnabled: true, NativeBaseURL: srv.URL})
+
+	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: "https://www.facebook.com/watch/?v=123"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if result.Platform != downloader.PlatformFacebook {
+		t.Errorf("Platform = %q, want facebook", result.Platform)
+	}
+	if result.Title != "My & Reel Title" {
+		t.Errorf("Title = %q, want decoded title", result.Title)
+	}
+	if result.Thumbnail != "https://scontent.example/t.jpg" {
+		t.Errorf("Thumbnail = %q, want og image", result.Thumbnail)
+	}
+	if result.Type != downloader.MediaVideo {
+		t.Errorf("Type = %q, want video", result.Type)
+	}
+	if len(result.Formats) != 2 {
+		t.Fatalf("len(Formats) = %d, want 2", len(result.Formats))
+	}
+	if result.Formats[0].URL != "https://video.example/hd.mp4" || result.Formats[0].Quality != "hd" {
+		t.Errorf("Formats[0] = %+v, want hd mp4", result.Formats[0])
+	}
+	if result.Formats[1].URL != "https://video.example/sd.mp4" || result.Formats[1].Quality != "sd" {
+		t.Errorf("Formats[1] = %+v, want sd mp4", result.Formats[1])
+	}
+	if result.Metadata["source"] != "facebook_native" {
+		t.Errorf("Metadata source = %q, want facebook_native", result.Metadata["source"])
+	}
+	if result.Metadata["description"] != "A cool reel" {
+		t.Errorf("Metadata description = %q, want A cool reel", result.Metadata["description"])
+	}
+}
+
+func TestResolveNativeImage(t *testing.T) {
+	htmlBody := `<html><head>
+<meta property="og:title" content="Photo Post">
+<meta property="og:image" content="https://scontent.example/thumb.jpg">
+<script>{"image":{"uri":"https:\/\/scontent.fbcdn.net\/v\/t51.29350-15\/12345_67890.jpg"}}</script>
+</head></html>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(htmlBody))
+	}))
+	defer srv.Close()
+
+	p := NewWithConfig(Config{NativeEnabled: true, NativeBaseURL: srv.URL})
+
+	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: "https://www.facebook.com/photo/?fbid=1"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if result.Type != downloader.MediaImage {
+		t.Errorf("Type = %q, want image", result.Type)
+	}
+	if len(result.Formats) != 1 {
+		t.Fatalf("len(Formats) = %d, want 1", len(result.Formats))
+	}
+	if result.Formats[0].URL != "https://scontent.fbcdn.net/v/t51.29350-15/12345_67890.jpg" {
+		t.Errorf("Format URL = %q, want fbcdn hd image", result.Formats[0].URL)
+	}
+	if result.Thumbnail != "https://scontent.example/thumb.jpg" {
+		t.Errorf("Thumbnail = %q, want og image", result.Thumbnail)
+	}
+}

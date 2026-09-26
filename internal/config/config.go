@@ -32,6 +32,14 @@ type Config struct {
 	// instead of only download URLs from the scraper fallbacks.
 	InstagramCookie string
 
+	// FacebookCookie is an optional logged-in facebook.com cookie attached to
+	// the native Facebook fetch.
+	FacebookCookie string
+
+	// TikTokCookie is an optional logged-in tiktok.com cookie attached to the
+	// native TikTok SSR fetch.
+	TikTokCookie string
+
 	ReadTimeout     time.Duration
 	WriteTimeout    time.Duration
 	IdleTimeout     time.Duration
@@ -69,6 +77,8 @@ func Load() (*Config, error) {
 		HTTPPort:        env.Get("HTTP_PORT", "8080"),
 		PublicBaseURL:   env.Get("PUBLIC_BASE_URL", ""),
 		InstagramCookie: env.Get("INSTAGRAM_COOKIE", ""),
+		FacebookCookie:  env.Get("FACEBOOK_COOKIE", ""),
+		TikTokCookie:    env.Get("TIKTOK_COOKIE", ""),
 		ReadTimeout:     env.GetDuration("HTTP_READ_TIMEOUT", 30*time.Second),
 		WriteTimeout:    env.GetDuration("HTTP_WRITE_TIMEOUT", 60*time.Second),
 		IdleTimeout:     env.GetDuration("HTTP_IDLE_TIMEOUT", 60*time.Second),

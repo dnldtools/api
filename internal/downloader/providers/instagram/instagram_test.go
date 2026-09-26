@@ -591,3 +591,84 @@ func TestCookieValue(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveNativeVideo(t *testing.T) {
+	htmlBody := `<html><head>
+<meta property="og:title" content="alice on Instagram: Hello IG">
+<meta property="og:image" content="https://cdn.example/thumb.jpg">
+<script>window.__data = {"xdt_api__v1__media__shortcode__web_info":{"items":[{"id":"1","shortcode":"abc12","media_type":2,"video_versions":[{"url":"https:\/\/cdn.example\/v.mp4"}],"display_url":"https:\/\/cdn.example\/t.jpg","owner":{"username":"alice","full_name":"Alice","profile_pic_url":"https:\/\/av.example\/a.jpg","is_verified":true},"caption":{"text":"Hello IG"},"like_count":42,"comment_count":3,"video_duration":12.5}]}};</script>
+</head></html>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(htmlBody))
+	}))
+	defer srv.Close()
+
+	p := NewWithConfig(Config{NativeEnabled: true, NativeBaseURL: srv.URL})
+	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testPostURL})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if result.Platform != downloader.PlatformInstagram {
+		t.Errorf("Platform = %q, want instagram", result.Platform)
+	}
+	if result.Title != "Hello IG" {
+		t.Errorf("Title = %q, want Hello IG", result.Title)
+	}
+	if result.Type != downloader.MediaVideo {
+		t.Errorf("Type = %q, want video", result.Type)
+	}
+	if len(result.Formats) != 1 || result.Formats[0].URL != "https://cdn.example/v.mp4" {
+		t.Fatalf("Formats = %+v, want v.mp4", result.Formats)
+	}
+	if result.DurationMs != 12500 {
+		t.Errorf("DurationMs = %d, want 12500", result.DurationMs)
+	}
+	if result.Metadata["author"] != "alice" {
+		t.Errorf("Metadata author = %q, want alice", result.Metadata["author"])
+	}
+	if result.Metadata["author_name"] != "Alice" {
+		t.Errorf("Metadata author_name = %q, want Alice", result.Metadata["author_name"])
+	}
+	if result.Metadata["likes"] != "42" {
+		t.Errorf("Metadata likes = %q, want 42", result.Metadata["likes"])
+	}
+	if result.Metadata["comments"] != "3" {
+		t.Errorf("Metadata comments = %q, want 3", result.Metadata["comments"])
+	}
+	if result.Metadata["author_verified"] != "true" {
+		t.Errorf("Metadata author_verified = %q, want true", result.Metadata["author_verified"])
+	}
+}
+
+func TestResolveNativeCarousel(t *testing.T) {
+	htmlBody := `<html><head>
+<script>window.__data = {"xdt_api__v1__media__shortcode__web_info":{"items":[{"id":"1","shortcode":"abc12","media_type":8,"carousel_media":[{"media_type":1,"image_versions2":{"candidates":[{"url":"https:\/\/cdn.example\/p1.jpg"}]}},{"media_type":1,"image_versions2":{"candidates":[{"url":"https:\/\/cdn.example\/p2.jpg"}]}}],"owner":{"username":"bob"},"caption":"Carousel"}]}};</script>
+</head></html>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(htmlBody))
+	}))
+	defer srv.Close()
+
+	p := NewWithConfig(Config{NativeEnabled: true, NativeBaseURL: srv.URL})
+	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testPostURL})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if result.Title != "Carousel" {
+		t.Errorf("Title = %q, want Carousel", result.Title)
+	}
+	if result.Type != downloader.MediaImage {
+		t.Errorf("Type = %q, want image", result.Type)
+	}
+	if len(result.Formats) != 2 {
+		t.Fatalf("len(Formats) = %d, want 2", len(result.Formats))
+	}
+	if result.Formats[0].URL != "https://cdn.example/p1.jpg" {
+		t.Errorf("Formats[0].URL = %q, want p1.jpg", result.Formats[0].URL)
+	}
+	if result.Formats[1].URL != "https://cdn.example/p2.jpg" {
+		t.Errorf("Formats[1].URL = %q, want p2.jpg", result.Formats[1].URL)
+	}
+}
