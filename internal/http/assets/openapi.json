@@ -1,0 +1,402 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "dnld.app Downloader API",
+    "version": "1.0.0",
+    "description": "Resolve and download media from supported social and file-sharing platforms. All endpoints are protected with an API key passed in the X-API-Key header."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Same origin as this documentation"
+    }
+  ],
+  "tags": [
+    { "name": "Downloads", "description": "Resolve media URLs and stream resolved files." },
+    { "name": "YouTube", "description": "Search, inspect, and convert YouTube videos." }
+  ],
+  "security": [
+    { "apiKey": [] }
+  ],
+  "paths": {
+    "/v1/downloads": {
+      "post": {
+        "tags": ["Downloads"],
+        "summary": "Resolve a media link",
+        "description": "Detects the platform from the URL and returns every available format plus metadata.",
+        "operationId": "resolveDownload",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "platform": { "$ref": "#/components/schemas/Platform" },
+                  "url": { "type": "string", "format": "uri" }
+                },
+                "required": ["url"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Media resolved successfully.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DownloadEnvelope" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "502": { "$ref": "#/components/responses/ProviderUnavailable" },
+          "504": { "$ref": "#/components/responses/ProviderTimeout" }
+        }
+      }
+    },
+    "/v1/downloads/proxy": {
+      "get": {
+        "tags": ["Downloads"],
+        "summary": "Stream a resolved media file",
+        "description": "Fetches a resolved media URL server-side and streams the bytes back so the client never talks to the upstream CDN directly. The url parameter is the source link the media was resolved from.",
+        "operationId": "streamMedia",
+        "parameters": [
+          { "name": "url", "in": "query", "required": true, "schema": { "type": "string", "format": "uri" }, "description": "Source link used to resolve the media." },
+          { "name": "type", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/MediaType" }, "description": "Requested media type. Defaults to video." },
+          { "name": "index", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 0, "default": 0 }, "description": "Zero-based index of the format among formats of the same type." }
+        ],
+        "responses": {
+          "200": {
+            "description": "Media stream. Content type depends on the requested format.",
+            "content": {
+              "application/octet-stream": { "schema": { "type": "string", "format": "binary" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/v1/youtube/search": {
+      "get": {
+        "tags": ["YouTube"],
+        "summary": "Search YouTube",
+        "operationId": "youtubeSearch",
+        "parameters": [
+          { "name": "q", "in": "query", "required": true, "schema": { "type": "string" }, "description": "Search query." },
+          { "name": "page_token", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Pagination token from a previous search response." }
+        ],
+        "responses": {
+          "200": {
+            "description": "Search results.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SearchEnvelope" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "502": { "$ref": "#/components/responses/ProviderUnavailable" }
+        }
+      }
+    },
+    "/v1/youtube/formats": {
+      "get": {
+        "tags": ["YouTube"],
+        "summary": "List available YouTube formats",
+        "operationId": "youtubeFormats",
+        "responses": {
+          "200": {
+            "description": "Format catalog.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/FormatsEnvelope" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/v1/youtube/convert": {
+      "post": {
+        "tags": ["YouTube"],
+        "summary": "Convert a YouTube video",
+        "description": "Converts a YouTube video to a chosen audio or video format and returns a direct download URL.",
+        "operationId": "youtubeConvert",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ConvertRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Conversion result.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConvertEnvelope" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "502": { "$ref": "#/components/responses/ProviderUnavailable" },
+          "504": { "$ref": "#/components/responses/ProviderTimeout" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "apiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "API key issued from your account."
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Invalid request.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+      },
+      "Unauthorized": {
+        "description": "Missing or invalid API key.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+      },
+      "NotFound": {
+        "description": "Media not found.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+      },
+      "RateLimited": {
+        "description": "Rate limit or quota exceeded.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+      },
+      "ProviderUnavailable": {
+        "description": "Upstream download service unavailable.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+      },
+      "ProviderTimeout": {
+        "description": "Upstream download service timed out.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+      }
+    },
+    "schemas": {
+      "Platform": {
+        "type": "string",
+        "enum": ["facebook", "instagram", "tiktok", "shopee", "apple", "uc-share", "doodstream", "pinterest", "youtube", "9xbuddy", "savefrom", "x", "threads"]
+      },
+      "MediaType": {
+        "type": "string",
+        "enum": ["video", "audio", "image"]
+      },
+      "Format": {
+        "type": "object",
+        "properties": {
+          "type": { "$ref": "#/components/schemas/MediaType" },
+          "url": { "type": "string", "format": "uri" },
+          "quality": { "type": "string" },
+          "ext": { "type": "string" },
+          "size": { "type": "integer", "format": "int64" }
+        },
+        "required": ["type", "url"]
+      },
+      "DownloadResult": {
+        "type": "object",
+        "properties": {
+          "platform": { "$ref": "#/components/schemas/Platform" },
+          "url": { "type": "string", "format": "uri" },
+          "title": { "type": "string" },
+          "type": { "$ref": "#/components/schemas/MediaType" },
+          "thumbnail": { "type": "string", "format": "uri" },
+          "duration_ms": { "type": "integer", "format": "int64" },
+          "formats": { "type": "array", "items": { "$ref": "#/components/schemas/Format" } },
+          "metadata": { "type": "object", "additionalProperties": { "type": "string" } }
+        },
+        "required": ["platform", "url"]
+      },
+      "SearchItem": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string" },
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "thumbnail_url": { "type": "string", "format": "uri" },
+          "uploader_name": { "type": "string" },
+          "uploader_url": { "type": "string", "format": "uri" },
+          "duration": { "type": "integer", "format": "int64" },
+          "view_count": { "type": "integer", "format": "int64" },
+          "upload_date": { "type": "string" }
+        },
+        "required": ["type", "id", "title"]
+      },
+      "SearchResult": {
+        "type": "object",
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/SearchItem" } },
+          "next_page_token": { "type": "string" }
+        },
+        "required": ["items"]
+      },
+      "YouTubeFormat": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string" },
+          "format": { "type": "string" },
+          "quality": { "type": "string" },
+          "label": { "type": "string" },
+          "bitrate": { "type": "string" },
+          "premium": { "type": "boolean" }
+        },
+        "required": ["id", "type", "format", "label"]
+      },
+      "Catalog": {
+        "type": "object",
+        "properties": {
+          "audio": { "type": "array", "items": { "$ref": "#/components/schemas/YouTubeFormat" } },
+          "video": { "type": "array", "items": { "$ref": "#/components/schemas/YouTubeFormat" } },
+          "quality_fallback": { "type": "boolean" },
+          "quality_fallback_message": { "type": "string" }
+        },
+        "required": ["audio", "video", "quality_fallback"]
+      },
+      "ConvertRequest": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string", "format": "uri" },
+          "preset": { "type": "string" },
+          "type": { "type": "string" },
+          "format": { "type": "string" },
+          "quality": { "type": "string" },
+          "bitrate": { "type": "string" },
+          "track": { "type": "string" }
+        },
+        "required": ["url"]
+      },
+      "FormatSpec": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string" },
+          "format": { "type": "string" },
+          "quality": { "type": "string" }
+        },
+        "required": ["id", "type", "format", "quality"]
+      },
+      "OutputSpec": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string" },
+          "format": { "type": "string" },
+          "quality": { "type": "string" },
+          "bitrate_kbps": { "type": "integer" }
+        },
+        "required": ["id", "type", "format", "quality"]
+      },
+      "ConvertResult": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string", "format": "uri" },
+          "title": { "type": "string" },
+          "duration": { "type": "integer", "format": "int64" },
+          "requested": { "$ref": "#/components/schemas/FormatSpec" },
+          "output": { "$ref": "#/components/schemas/OutputSpec" },
+          "quality_changed": { "type": "boolean" },
+          "quality_note": { "type": "string" },
+          "download_url": { "type": "string", "format": "uri" },
+          "cover": { "type": "string", "format": "uri" }
+        },
+        "required": ["url", "requested", "output", "quality_changed", "download_url", "cover"]
+      },
+      "ErrorPayload": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "string" },
+          "category": { "type": "string" },
+          "message": { "type": "string" },
+          "details": {},
+          "retryable": { "type": "boolean" },
+          "request_id": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time" }
+        },
+        "required": ["code", "category", "message", "retryable"]
+      },
+      "DownloadEnvelope": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "message": { "type": "string" },
+          "data": { "$ref": "#/components/schemas/DownloadResult" },
+          "error": { "$ref": "#/components/schemas/ErrorPayload" },
+          "request_id": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time" }
+        },
+        "required": ["success", "data"]
+      },
+      "SearchEnvelope": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "message": { "type": "string" },
+          "data": { "$ref": "#/components/schemas/SearchResult" },
+          "error": { "$ref": "#/components/schemas/ErrorPayload" },
+          "request_id": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time" }
+        },
+        "required": ["success", "data"]
+      },
+      "FormatsEnvelope": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "message": { "type": "string" },
+          "data": { "$ref": "#/components/schemas/Catalog" },
+          "error": { "$ref": "#/components/schemas/ErrorPayload" },
+          "request_id": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time" }
+        },
+        "required": ["success", "data"]
+      },
+      "ConvertEnvelope": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "message": { "type": "string" },
+          "data": { "$ref": "#/components/schemas/ConvertResult" },
+          "error": { "$ref": "#/components/schemas/ErrorPayload" },
+          "request_id": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time" }
+        },
+        "required": ["success", "data"]
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "message": { "type": "string" },
+          "data": {},
+          "error": { "$ref": "#/components/schemas/ErrorPayload" },
+          "request_id": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time" }
+        },
+        "required": ["success", "error"]
+      }
+    }
+  }
+}

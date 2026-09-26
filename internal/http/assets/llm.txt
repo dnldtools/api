@@ -1,0 +1,104 @@
+# dnld.app Downloader API
+
+> Resolve and download media from social and file-sharing platforms.
+> Every endpoint requires an API key sent in the X-API-Key header.
+> The base URL is the host that serves this file.
+
+## Authentication
+
+Pass your API key in the X-API-Key request header. Missing or invalid keys return 401 with an error envelope.
+
+## Error shape
+
+All non-2xx responses use this JSON envelope:
+
+```json
+{"success":false,"message":"human readable message","error":{"code":"MACHINE_CODE","category":"CATEGORY","message":"details","details":null,"retryable":false,"request_id":"...","timestamp":"..."}}
+```
+
+## POST /v1/downloads
+
+Resolve a media link and return every available format plus metadata.
+
+Request body (JSON):
+
+- url (string, required) - the link to resolve
+- platform (string, optional) - hint: facebook, instagram, tiktok, shopee, apple, uc-share, doodstream, pinterest, youtube, 9xbuddy, savefrom, x, threads
+
+Response data (JSON):
+
+- platform (string)
+- url (string) - canonical source url
+- title (string, optional)
+- type (string, optional) - video | audio | image when all formats share one type
+- thumbnail (string, optional)
+- duration_ms (integer, optional)
+- formats (array) - each item: type (video | audio | image), url, quality, ext, size
+- metadata (object) - string key/value pairs
+
+## GET /v1/downloads/proxy
+
+Stream a resolved media file so the client never contacts the upstream CDN directly.
+
+Query params:
+
+- url (string, required) - the source link the media was resolved from
+- type (string, optional) - video | audio | image, default video
+- index (integer, optional) - zero-based position of the format among formats of the same type, default 0
+
+Returns the raw media bytes with the matching content type.
+
+## GET /v1/youtube/search
+
+Search YouTube.
+
+Query params:
+
+- q (string, required) - search query
+- page_token (string, optional) - pagination token from a previous search response
+
+Response data:
+
+- items (array) - each: type, id, title, description, thumbnail_url, uploader_name, uploader_url, duration, view_count, upload_date
+- next_page_token (string, optional)
+
+## GET /v1/youtube/formats
+
+List the available YouTube format catalog.
+
+Response data:
+
+- audio (array) - each: id, type, format, quality, label, bitrate, premium
+- video (array) - same shape as audio
+- quality_fallback (boolean)
+- quality_fallback_message (string, optional)
+
+## POST /v1/youtube/convert
+
+Convert a YouTube video to a chosen format and return a direct download URL.
+
+Request body (JSON):
+
+- url (string, required) - YouTube video url
+- preset (string, optional)
+- type (string, optional)
+- format (string, optional)
+- quality (string, optional)
+- bitrate (string, optional)
+- track (string, optional)
+
+Response data:
+
+- url (string)
+- title (string, optional)
+- duration (integer, optional)
+- requested (object) - id, type, format, quality
+- output (object) - id, type, format, quality, bitrate_kbps
+- quality_changed (boolean)
+- quality_note (string, optional)
+- download_url (string)
+- cover (string)
+
+## Supported platforms
+
+facebook, instagram, tiktok, shopee, apple, uc-share, doodstream, pinterest, youtube, 9xbuddy, savefrom, x, threads
