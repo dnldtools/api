@@ -120,8 +120,8 @@ func NewRouter(deps Dependencies) http.Handler {
 
 	mux.HandleFunc("GET /{$}", handleDocs(errHandler))
 	mux.HandleFunc("GET /openapi.json", handleDocs(errHandler))
-	mux.HandleFunc("GET /llm.txt", handleDocs(errHandler))
 	mux.HandleFunc("GET /llms.txt", handleDocs(errHandler))
+	mux.HandleFunc("GET /llm.txt", handleDocs(errHandler))
 
 	mux.HandleFunc("/", handleNotFound(errHandler))
 

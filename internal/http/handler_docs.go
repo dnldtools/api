@@ -12,7 +12,7 @@ import (
 //go:embed assets/openapi.json
 var openapiSpec []byte
 
-//go:embed assets/llm.txt
+//go:embed assets/llms.txt
 var llmDoc []byte
 
 func handleDocs(errHandler *ErrorHandler) http.HandlerFunc {
@@ -26,7 +26,7 @@ func handleDocs(errHandler *ErrorHandler) http.HandlerFunc {
 			return
 		}
 
-		if r.URL.Path == "/llm.txt" || r.URL.Path == "/llms.txt" {
+		if r.URL.Path == "/llms.txt" || r.URL.Path == "/llm.txt" {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-store")
 			w.WriteHeader(http.StatusOK)
