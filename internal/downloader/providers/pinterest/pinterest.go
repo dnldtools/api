@@ -29,6 +29,7 @@ type Config struct {
 	OfficialBaseURL string
 	Timeout         time.Duration
 	UserAgent       string
+	PinterestCookie string
 	HTTPClient      *http.Client
 }
 
@@ -41,6 +42,7 @@ type Provider struct {
 	pintsave  string
 	official  string
 	userAgent string
+	cookie    string
 	client    *http.Client
 }
 
@@ -76,6 +78,7 @@ func NewWithConfig(cfg Config) *Provider {
 		pintsave:  cfg.PintsaveURL,
 		official:  strings.TrimRight(cfg.OfficialBaseURL, "/"),
 		userAgent: cfg.UserAgent,
+		cookie:    strings.TrimSpace(cfg.PinterestCookie),
 		client:    client,
 	}
 }
@@ -388,6 +391,9 @@ func (p *Provider) get(ctx context.Context, rawURL string, extra map[string]stri
 	}
 	req.Header.Set("User-Agent", p.userAgent)
 	req.Header.Set("Accept", "*/*")
+	if p.cookie != "" {
+		req.Header.Set("Cookie", p.cookie)
+	}
 	for k, v := range extra {
 		req.Header.Set(k, v)
 	}

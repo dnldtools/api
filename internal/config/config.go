@@ -1,13 +1,17 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
+	"os"
+	"strings"
 	"time"
 
 	"rest-api/internal/browser"
 	"rest-api/internal/cache"
 	"rest-api/internal/database"
+	"rest-api/internal/r2"
 	"rest-api/pkg/env"
 )
 
@@ -16,33 +20,15 @@ type Config struct {
 	AppEnv     string
 	AppVersion string
 
-	HTTPHost string
-	HTTPPort string
-
-	// PublicBaseURL is the externally reachable base URL of this API (e.g.
-	// https://api.dnld.app). When set it is used to build absolute URLs in
-	// responses (like streaming-proxy links) instead of deriving them from the
-	// incoming request, which is unreliable behind a reverse proxy.
-	PublicBaseURL string
-
-	// InstagramCookie is an optional logged-in Instagram session cookie
-	// (e.g. `sessionid=...; ds_user_id=...; csrftoken=...`). When set, the
-	// official Instagram GraphQL path is used for posts/reels so responses
-	// include full metadata (author, caption, likes, views, dimensions, etc.)
-	// instead of only download URLs from the scraper fallbacks.
+	HTTPHost        string
+	HTTPPort        string
+	PublicBaseURL   string
 	InstagramCookie string
+	FacebookCookie  string
+	TikTokCookie    string
+	PinterestCookie string
+	ThreadsCookie   string
 
-	// FacebookCookie is an optional logged-in facebook.com cookie attached to
-	// the native Facebook fetch.
-	FacebookCookie string
-
-	// TikTokCookie is an optional logged-in tiktok.com cookie attached to the
-	// native TikTok SSR fetch.
-	TikTokCookie string
-
-	// DocsAPIKey is an optional dnld.app API key (ra_...) that gets pre-filled
-	// into the Scalar API reference client so the Test Request feature can call
-	// the API without the reader pasting a key manually.
 	DocsAPIKey string
 
 	ReadTimeout     time.Duration
@@ -50,12 +36,8 @@ type Config struct {
 	IdleTimeout     time.Duration
 	ShutdownTimeout time.Duration
 
-	// ResolveTimeout bounds a single downloader resolve (platform detection +
-	// one provider). It must stay below HTTP WriteTimeout.
 	ResolveTimeout time.Duration
 
-	// ResolveCacheTTL is how long a successfully resolved result is cached in
-	// Redis (when Redis is enabled).
 	ResolveCacheTTL time.Duration
 
 	PrettyJSON bool
@@ -68,11 +50,34 @@ type Config struct {
 	Redis cache.Config
 
 	MetricsQueueSize int
+
+	R2 r2.Config
 }
 
 func Load() (*Config, error) {
 
 	_ = env.Load(".env")
+
+	instagramCookie, err := loadCookie(env.Get("INSTAGRAM_COOKIE", ""))
+	if err != nil {
+		return nil, fmt.Errorf("INSTAGRAM_COOKIE: %w", err)
+	}
+	facebookCookie, err := loadCookie(env.Get("FACEBOOK_COOKIE", ""))
+	if err != nil {
+		return nil, fmt.Errorf("FACEBOOK_COOKIE: %w", err)
+	}
+	tiktokCookie, err := loadCookie(env.Get("TIKTOK_COOKIE", ""))
+	if err != nil {
+		return nil, fmt.Errorf("TIKTOK_COOKIE: %w", err)
+	}
+	pinterestCookie, err := loadCookie(env.Get("PINTEREST_COOKIE", ""))
+	if err != nil {
+		return nil, fmt.Errorf("PINTEREST_COOKIE: %w", err)
+	}
+	threadsCookie, err := loadCookie(env.Get("THREADS_COOKIE", ""))
+	if err != nil {
+		return nil, fmt.Errorf("THREADS_COOKIE: %w", err)
+	}
 
 	cfg := &Config{
 		AppName:         env.Get("APP_NAME", "rest-api"),
@@ -81,9 +86,11 @@ func Load() (*Config, error) {
 		HTTPHost:        env.Get("HTTP_HOST", "0.0.0.0"),
 		HTTPPort:        env.Get("HTTP_PORT", "8080"),
 		PublicBaseURL:   env.Get("PUBLIC_BASE_URL", ""),
-		InstagramCookie: env.Get("INSTAGRAM_COOKIE", ""),
-		FacebookCookie:  env.Get("FACEBOOK_COOKIE", ""),
-		TikTokCookie:    env.Get("TIKTOK_COOKIE", ""),
+		InstagramCookie: instagramCookie,
+		FacebookCookie:  facebookCookie,
+		TikTokCookie:    tiktokCookie,
+		PinterestCookie: pinterestCookie,
+		ThreadsCookie:   threadsCookie,
 		DocsAPIKey:      env.Get("DOCS_API_KEY", ""),
 		ReadTimeout:     env.GetDuration("HTTP_READ_TIMEOUT", 30*time.Second),
 		WriteTimeout:    env.GetDuration("HTTP_WRITE_TIMEOUT", 60*time.Second),
@@ -129,6 +136,15 @@ func Load() (*Config, error) {
 		},
 
 		MetricsQueueSize: env.GetInt("METRICS_QUEUE_SIZE", 1024),
+	}
+
+	accounts, err := parseR2Accounts(env.Get("R2_ACCOUNTS", ""))
+	if err != nil {
+		return nil, fmt.Errorf("R2_ACCOUNTS: %w", err)
+	}
+	cfg.R2 = r2.Config{
+		Accounts:   accounts,
+		PresignTTL: env.GetDuration("R2_PRESIGN_TTL", 5*time.Minute),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -184,4 +200,41 @@ func (c *Config) validate() error {
 		return fmt.Errorf("METRICS_QUEUE_SIZE must be positive")
 	}
 	return nil
+}
+
+func parseR2Accounts(raw string) ([]r2.Account, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	var accounts []r2.Account
+	if err := json.Unmarshal([]byte(raw), &accounts); err != nil {
+		return nil, err
+	}
+	return accounts, nil
+}
+
+func loadCookie(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("cookie file %q: %w", path, err)
+	}
+	var entries []struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return "", fmt.Errorf("cookie file %q: %w", path, err)
+	}
+	parts := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.Name == "" {
+			continue
+		}
+		parts = append(parts, e.Name+"="+e.Value)
+	}
+	return strings.Join(parts, "; "), nil
 }

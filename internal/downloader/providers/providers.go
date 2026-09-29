@@ -32,6 +32,11 @@ func RegisterAll(registry *downloader.Registry, opts ...Options) error {
 	ttCfg := tiktok.DefaultConfig()
 	ttCfg.TikTokCookie = o.TikTokCookie
 
+	pinCfg := pinterest.DefaultConfig()
+	pinCfg.PinterestCookie = o.PinterestCookie
+
+	thCfg := threads.Config{Cookie: o.ThreadsCookie}
+
 	for _, p := range []downloader.Provider{
 		facebook.NewWithConfig(fbCfg),
 		instagram.NewWithConfig(igCfg),
@@ -40,9 +45,9 @@ func RegisterAll(registry *downloader.Registry, opts ...Options) error {
 		apple.New(),
 		ucshare.New(),
 		doodstream.New(),
-		pinterest.New(),
+		pinterest.NewWithConfig(pinCfg),
 		x.New(),
-		threads.New(),
+		threads.NewWithConfig(thCfg),
 		// YouTube claims its own URLs so they are routed to the dedicated
 		// /v1/youtube/* endpoints instead of the generic fallback below.
 		youtube.New(),
@@ -75,4 +80,10 @@ type Options struct {
 	// TikTokCookie is a logged-in tiktok.com cookie attached to the native
 	// TikTok SSR fetch.
 	TikTokCookie string
+
+	// PinterestCookie is a logged-in pinterest.com cookie attached to the
+	// official Pinterest fetch.
+	PinterestCookie string
+
+	ThreadsCookie string
 }

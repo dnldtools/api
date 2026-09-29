@@ -17,6 +17,9 @@ coverage.*
 .env
 .env.local
 
+# Provider session cookies (secrets)
+/cookie/
+
 # IDE / editor
 .idea/
 .vscode/

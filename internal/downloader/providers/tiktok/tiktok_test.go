@@ -111,6 +111,28 @@ func TestResolveOfficialVideo(t *testing.T) {
 	}
 }
 
+func TestResolveGatedVideo(t *testing.T) {
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		root := map[string]interface{}{
+			"__DEFAULT_SCOPE__": map[string]interface{}{
+				"webapp.video-detail": map[string]interface{}{
+					"statusCode": float64(10204),
+					"statusMsg":  "paid_collection_age",
+				},
+			},
+		}
+		b, _ := json.Marshal(root)
+		_, _ = w.Write([]byte(`<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">` + string(b) + `</script>` + strings.Repeat("x", 300)))
+	}))
+	defer relay.Close()
+
+	p := NewWithConfig(Config{RelayBaseURL: relay.URL, OfficialBaseURL: relay.URL, NativeEnabled: false, TikwmEnabled: false, SnapXEnabled: false})
+	_, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testVideoURL})
+	if !stderrors.Is(err, downloader.ErrMediaNotFound) {
+		t.Fatalf("error = %v, want ErrMediaNotFound", err)
+	}
+}
+
 func TestResolveOfficialPhotoPost(t *testing.T) {
 	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(rehydrationPage(map[string]interface{}{

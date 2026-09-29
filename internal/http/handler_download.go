@@ -6,6 +6,7 @@ import (
 
 	"rest-api/internal/downloader"
 	apperrors "rest-api/internal/errors"
+	"rest-api/internal/storage"
 )
 
 type downloadRequest struct {
@@ -13,7 +14,7 @@ type downloadRequest struct {
 	URL      string `json:"url"`
 }
 
-func handleDownload(svc *downloader.Service, errHandler *ErrorHandler, publicBaseURL string) http.HandlerFunc {
+func handleDownload(svc *downloader.Service, uploader *storage.Uploader, errHandler *ErrorHandler, publicBaseURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req downloadRequest
 		if err := decodeJSON(r, &req); err != nil {
@@ -32,10 +33,9 @@ func handleDownload(svc *downloader.Service, errHandler *ErrorHandler, publicBas
 			return
 		}
 
-		// TikTok formats resolve to direct CDN URLs. Rewrite them to our own
-		// streaming-proxy endpoint so clients never have to send upstream
-		// cookies/referer headers (and never hit 403 on the CDN directly).
-		if result.Platform == downloader.PlatformTikTok {
+		if uploader != nil && uploader.ShouldMirror(result.Platform) {
+			uploader.Mirror(r.Context(), svc, result)
+		} else if result.Platform == downloader.PlatformTikTok {
 			base := strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
 			if base == "" {
 				base = externalBaseURL(r)

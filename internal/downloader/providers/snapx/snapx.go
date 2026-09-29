@@ -329,10 +329,10 @@ func parseTikTok(raw map[string]any, mediaURL string) (*downloader.DownloadResul
 		}
 		formats = append(formats, downloader.Format{Type: typ, URL: u, Quality: quality, Ext: ext})
 	}
+	add("rapidcdn_link", "rapidcdn", downloader.MediaVideo, "mp4")
+	add("snapxcdn", "snapxcdn", downloader.MediaVideo, "mp4")
 	add("video_link", "cdn", downloader.MediaVideo, "mp4")
 	add("original_video_link", "original", downloader.MediaVideo, "mp4")
-	add("snapxcdn", "snapxcdn", downloader.MediaVideo, "mp4")
-	add("rapidcdn_link", "rapidcdn", downloader.MediaVideo, "mp4")
 	add("music", "music", downloader.MediaAudio, "mp3")
 	if len(formats) == 0 && status != "100" {
 		return nil, downloader.ErrMediaNotFound

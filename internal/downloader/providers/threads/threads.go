@@ -34,11 +34,13 @@ type Config struct {
 	Timeout    time.Duration
 	UserAgent  string
 	HTTPClient *http.Client
+	Cookie     string
 }
 
 type Provider struct {
 	userAgent string
 	client    *http.Client
+	cookie    string
 }
 
 type mediaItem struct {
@@ -71,7 +73,7 @@ func NewWithConfig(cfg Config) *Provider {
 	if hc == nil {
 		hc = &http.Client{Timeout: cfg.Timeout}
 	}
-	return &Provider{userAgent: cfg.UserAgent, client: hc}
+	return &Provider{userAgent: cfg.UserAgent, client: hc, cookie: strings.TrimSpace(cfg.Cookie)}
 }
 
 func (p *Provider) Name() string { return "threads" }
@@ -100,7 +102,7 @@ func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) 
 	}
 	shortcode := m[1]
 
-	page := loadPage(ctx, p.client, target)
+	page := loadPage(ctx, p.client, target, p.cookie)
 	if page == "" {
 		return nil, downloader.ErrProviderUnavailable
 	}
@@ -112,7 +114,7 @@ func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) 
 
 	if len(posts) == 0 && lsd != "" && shortcode != "" {
 		if postID := shortcodeToID(shortcode); postID != "" {
-			posts = graphqlPost(ctx, p.client, lsd, appID, postID, target)
+			posts = graphqlPost(ctx, p.client, lsd, appID, postID, target, p.cookie)
 		}
 	}
 
@@ -177,24 +179,46 @@ func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) 
 	return res, nil
 }
 
-func loadPage(ctx context.Context, client *http.Client, target string) string {
+func loadPage(ctx context.Context, client *http.Client, target, cookie string) string {
+	if cookie != "" {
+		if body := fetchPage(ctx, client, target, defaultUA, cookie); body != "" {
+			return body
+		}
+	}
 	for _, ua := range []string{crawlerUA, defaultUA} {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-		if err != nil {
-			continue
+		if body := fetchPage(ctx, client, target, ua, ""); body != "" {
+			return body
 		}
-		req.Header.Set("User-Agent", ua)
-		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/json,*/*;q=0.8")
-		req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-		resp, err := client.Do(req)
-		if err != nil {
-			continue
-		}
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
-		resp.Body.Close()
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 && strings.Contains(string(body), "text_post_app_info") {
-			return string(body)
-		}
+	}
+	return ""
+}
+
+func fetchPage(ctx context.Context, client *http.Client, target, ua, cookie string) string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	if ua == defaultUA {
+		req.Header.Set("Sec-Fetch-Dest", "document")
+		req.Header.Set("Sec-Fetch-Mode", "navigate")
+		req.Header.Set("Sec-Fetch-Site", "none")
+		req.Header.Set("Sec-Fetch-User", "?1")
+		req.Header.Set("Upgrade-Insecure-Requests", "1")
+	}
+	if cookie != "" {
+		req.Header.Set("Cookie", cookie)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 && strings.Contains(string(body), "text_post_app_info") {
+		return string(body)
 	}
 	return ""
 }
@@ -365,39 +389,34 @@ func pickBestURL(versions any) (string, int64, int64) {
 }
 
 func mediaFromNode(node map[string]any) []mediaItem {
-	var out []mediaItem
 	if node == nil {
-		return out
+		return nil
 	}
-	var candidates []map[string]any
-	if _, ok := node["video_versions"]; ok {
-		candidates = append(candidates, node)
-	}
-	if _, ok := node["image_versions2"]; ok {
-		candidates = append(candidates, node)
-	}
-	if cm, ok := node["carousel_media"].([]any); ok {
+	if cm, ok := node["carousel_media"].([]any); ok && len(cm) > 0 {
+		var out []mediaItem
 		for _, c := range cm {
 			if mItem, ok := c.(map[string]any); ok {
-				candidates = append(candidates, mItem)
+				out = append(out, mediaFromItem(mItem)...)
 			}
 		}
+		return out
 	}
-	if mItem, ok := node["media"].(map[string]any); ok {
-		candidates = append(candidates, mItem)
-	}
+	return mediaFromItem(node)
+}
 
-	for _, mItem := range candidates {
-		if mItem == nil {
-			continue
-		}
-		vURL, _, _ := pickBestURL(mItem["video_versions"])
-		iURL, _, _ := imageURL(mItem)
-		if vURL != "" {
-			out = append(out, mediaItem{kind: "video", url: vURL})
-		} else if iURL != "" {
-			out = append(out, mediaItem{kind: "photo", url: iURL})
-		}
+func mediaFromItem(mItem map[string]any) []mediaItem {
+	var out []mediaItem
+	if mItem == nil {
+		return out
+	}
+	if vURL, _, _ := pickBestURL(mItem["video_versions"]); vURL != "" {
+		return []mediaItem{{kind: "video", url: vURL}}
+	}
+	if iURL, _, _ := imageURL(mItem); iURL != "" {
+		return []mediaItem{{kind: "photo", url: iURL}}
+	}
+	if nested, ok := mItem["media"].(map[string]any); ok {
+		return mediaFromItem(nested)
 	}
 	return out
 }
@@ -502,7 +521,7 @@ func walk(v any, fn func(map[string]any)) {
 	}
 }
 
-func graphqlPost(ctx context.Context, client *http.Client, lsd, appID, postID, referer string) []post {
+func graphqlPost(ctx context.Context, client *http.Client, lsd, appID, postID, referer, cookie string) []post {
 	variables, _ := json.Marshal(map[string]string{"postID": postID})
 	body := url.Values{}
 	body.Set("lsd", lsd)
@@ -523,6 +542,9 @@ func graphqlPost(ctx context.Context, client *http.Client, lsd, appID, postID, r
 		req.Header.Set("Referer", referer)
 		req.Header.Set("Accept", "*/*")
 		req.Header.Set("User-Agent", defaultUA)
+		if cookie != "" {
+			req.Header.Set("Cookie", cookie)
+		}
 
 		resp, err := client.Do(req)
 		if err != nil {

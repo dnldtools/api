@@ -6,10 +6,13 @@ import (
 
 	"rest-api/internal/auth"
 	"rest-api/internal/downloader"
+	"rest-api/internal/media"
 	"rest-api/internal/metrics"
 	"rest-api/internal/plans"
 	"rest-api/internal/quota"
+	"rest-api/internal/r2"
 	"rest-api/internal/ratelimit"
+	"rest-api/internal/storage"
 	"rest-api/internal/youtube"
 )
 
@@ -39,6 +42,12 @@ type Dependencies struct {
 	Quota quota.Service
 
 	Plans plans.PolicySet
+
+	Storage *storage.Uploader
+
+	R2 *r2.Manager
+
+	Media *media.Store
 
 	ErrorHandler *ErrorHandler
 }
@@ -71,7 +80,7 @@ func NewRouter(deps Dependencies) http.Handler {
 
 	mux := http.NewServeMux()
 
-	downloadHandler := handleDownload(deps.Downloader, errHandler, deps.PublicBaseURL)
+	downloadHandler := handleDownload(deps.Downloader, deps.Storage, errHandler, deps.PublicBaseURL)
 	protected := chain(
 		downloadHandler,
 		authMiddleware(deps.Auth, errHandler),
@@ -106,6 +115,10 @@ func NewRouter(deps Dependencies) http.Handler {
 	registerProtected(mux, "GET /v1/keys", handleListKeys(deps.Keys, errHandler), deps, errHandler)
 	registerProtected(mux, "POST /v1/keys", handleCreateKey(deps.Keys, errHandler), deps, errHandler)
 	registerProtected(mux, "POST /v1/keys/{id}/revoke", handleRevokeKey(deps.Keys, errHandler), deps, errHandler)
+
+	if deps.R2 != nil && deps.Media != nil {
+		registerProtected(mux, "GET /v1/media/{id}", handleMediaGet(deps.Media, deps.R2, errHandler), deps, errHandler)
+	}
 
 	registerAdmin(mux, "GET /v1/admin/accounts", handleAdminListAccounts(deps.Admin, errHandler), deps, errHandler)
 	registerAdmin(mux, "GET /v1/admin/accounts/{id}", handleAdminGetAccount(deps.Admin, errHandler), deps, errHandler)

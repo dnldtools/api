@@ -95,3 +95,57 @@ func TestUnavailable(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+func TestResolveOfficialAttachesCookie(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/pin", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusBadGateway)
+	})
+	mux.HandleFunc("/fetch", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusBadGateway)
+	})
+	var seen string
+	mux.HandleFunc("/pin/", func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Get("Cookie")
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><head><meta property="og:video" content="https://v1.pinimg.com/videos/mc/720p/abc.mp4"></head><body></body></html>`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	p := NewWithConfig(Config{PinssaverURL: srv.URL + "/api/pin", PintsaveURL: srv.URL + "/fetch", OfficialBaseURL: srv.URL, PinterestCookie: "csrftoken=abc; _pinterest_sess=xyz"})
+	res, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: "https://www.pinterest.com/pin/12345678901/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Metadata["source"] != "official" {
+		t.Fatalf("source %v", res.Metadata)
+	}
+	if seen != "csrftoken=abc; _pinterest_sess=xyz" {
+		t.Fatalf("Cookie header = %q", seen)
+	}
+}
+
+func TestResolveOfficialNoCookie(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/pin", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusBadGateway)
+	})
+	mux.HandleFunc("/fetch", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusBadGateway)
+	})
+	var seen string
+	mux.HandleFunc("/pin/", func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Get("Cookie")
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><head><meta property="og:video" content="https://v1.pinimg.com/videos/mc/720p/abc.mp4"></head><body></body></html>`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	p := NewWithConfig(Config{PinssaverURL: srv.URL + "/api/pin", PintsaveURL: srv.URL + "/fetch", OfficialBaseURL: srv.URL})
+	if _, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: "https://www.pinterest.com/pin/12345678901/"}); err != nil {
+		t.Fatal(err)
+	}
+	if seen != "" {
+		t.Fatalf("Cookie header = %q, want empty", seen)
+	}
+}

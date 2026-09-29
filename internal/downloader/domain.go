@@ -34,6 +34,7 @@ type Format struct {
 	Quality string    `json:"quality,omitempty"`
 	Ext     string    `json:"ext,omitempty"`
 	Size    int64     `json:"size,omitempty"`
+	MediaID int64     `json:"media_id,omitempty"`
 }
 
 type DownloadRequest struct {

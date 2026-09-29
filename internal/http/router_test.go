@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"rest-api/internal/downloader"
+	"rest-api/internal/media"
+	"rest-api/internal/r2"
 	"rest-api/internal/ratelimit"
 	"rest-api/internal/youtube"
 )
@@ -18,6 +20,13 @@ func newTestRouter(t *testing.T) http.Handler {
 
 	registry := downloader.NewRegistry()
 	svc := downloader.NewService(registry)
+
+	mgr, err := r2.NewManager(r2.Config{Accounts: []r2.Account{
+		{Name: "r2-01", AccountID: "a", AccessKey: "k", SecretKey: "s", Bucket: "b"},
+	}})
+	if err != nil {
+		t.Fatalf("build r2 manager: %v", err)
+	}
 
 	return NewRouter(Dependencies{
 		PrettyJSON:  false,
@@ -29,6 +38,8 @@ func newTestRouter(t *testing.T) http.Handler {
 		Admin:       &fakeAdminManager{},
 		RateLimiter: ratelimit.NewMemoryLimiter(),
 		Quota:       &fakeQuota{},
+		R2:          mgr,
+		Media:       media.NewStore(nil),
 	})
 }
 

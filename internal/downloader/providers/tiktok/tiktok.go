@@ -39,6 +39,8 @@ const (
 	tikwmTimeout        = 15 * time.Second
 )
 
+var errTikTokUnavailable = stderrors.New("tiktok: video is gated or unavailable")
+
 type Config struct {
 	RelayBaseURL string
 
@@ -242,6 +244,9 @@ func (p *Provider) resolveMedia(ctx context.Context, resolved string) (*download
 	}
 
 	offRes, offErr := p.queryOfficial(ctx, resolved)
+	if stderrors.Is(offErr, errTikTokUnavailable) {
+		return nil, downloader.ErrMediaNotFound
+	}
 	if offErr == nil && offRes != nil && len(offRes.Formats) > 0 {
 		offRes.Platform = downloader.PlatformTikTok
 		offRes.URL = resolved
@@ -321,6 +326,15 @@ func (p *Provider) queryShortDrama(ctx context.Context, dramaURL string) (*downl
 	res.Metadata["source"] = "tiktok_shortdrama"
 	res.Metadata["drama_id"] = dramaID
 	res.Metadata["drama_episode"] = strconv.Itoa(episode.DramaInfo.DramaVideoData.EpisodeNumber)
+	if episode.DramaInfo.IsLimitedFree {
+		res.Metadata["drama_limited_free"] = "true"
+	}
+	if episode.DramaInfo.DramaVideoData.IsPreview {
+		res.Metadata["drama_is_preview"] = "true"
+	}
+	if episode.Video.Width == 0 && episode.Video.Height == 0 {
+		res.Metadata["drama_gated"] = "true"
+	}
 	if totalEpisodes > 0 {
 		res.Metadata["drama_episode_count"] = strconv.Itoa(totalEpisodes)
 	}
@@ -431,11 +445,14 @@ type dramaEpisodeAuthor struct {
 type dramaEpisodeVideo struct {
 	Cover       string `json:"cover"`
 	OriginCover string `json:"originCover"`
+	Width       int    `json:"width"`
+	Height      int    `json:"height"`
 }
 
 type dramaEpisodeInfo struct {
 	Description    string         `json:"description"`
 	AuthorUID      string         `json:"authorUID"`
+	IsLimitedFree  bool           `json:"isLimitedFree"`
 	Cover          dramaCoverList `json:"cover"`
 	DramaVideoData dramaVideoData `json:"DramaVideoData"`
 }
@@ -519,11 +536,15 @@ func (p *Provider) resolveTikTokURL(ctx context.Context, inputURL string) (strin
 func (p *Provider) queryOfficial(ctx context.Context, target string) (*downloader.DownloadResult, error) {
 	// Direct fetch to TikTok (no relay), mirroring the reference scraper.
 	fetchURL := p.officialBase + officialPath(target)
-	body, _, status, err := p.do(ctx, http.MethodGet, fetchURL, map[string]string{
+	headers := map[string]string{
 		"user-agent":      officialUserAgent,
 		"accept":          "text/html",
 		"accept-language": "en-US,en;q=0.9",
-	}, nil, officialTimeout)
+	}
+	if p.ttCookie != "" {
+		headers["cookie"] = p.ttCookie
+	}
+	body, _, status, err := p.do(ctx, http.MethodGet, fetchURL, headers, nil, officialTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -547,6 +568,9 @@ func (p *Provider) queryOfficial(ctx context.Context, target string) (*downloade
 	detail := nestedMap(data, "__DEFAULT_SCOPE__", "webapp.video-detail")
 	if detail == nil {
 		return nil, downloader.ErrProviderInvalidResponse
+	}
+	if num(detail["statusCode"]) != 0 {
+		return nil, errTikTokUnavailable
 	}
 
 	item := nestedMap(detail, "itemInfo", "itemStruct")
@@ -1131,6 +1155,7 @@ var mediaHostSuffixes = []string{
 	"byteimg.com",
 	"ibyteimg.com",
 	"snapcdn.app",
+	"rapidcdn.app",
 	"tik-cdn.com",
 	"snaptik.net",
 }

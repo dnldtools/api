@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"testing"
 	"time"
 )
@@ -133,5 +134,89 @@ func TestConfigLoadRejectsInvalidEnv(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Error("Load() = nil, want error for non-positive shutdown timeout")
+	}
+}
+
+func TestParseR2AccountsValid(t *testing.T) {
+	accounts, err := parseR2Accounts(`[{"name":"r2-01","account_id":"a","access_key":"k","secret_key":"s","bucket":"media"}]`)
+	if err != nil {
+		t.Fatalf("parseR2Accounts() = %v", err)
+	}
+	if len(accounts) != 1 || accounts[0].Name != "r2-01" || accounts[0].Bucket != "media" {
+		t.Fatalf("unexpected accounts: %+v", accounts)
+	}
+}
+
+func TestParseR2AccountsEmpty(t *testing.T) {
+	accounts, err := parseR2Accounts("")
+	if err != nil {
+		t.Fatalf("parseR2Accounts() = %v", err)
+	}
+	if accounts != nil {
+		t.Fatalf("parseR2Accounts() = %v, want nil", accounts)
+	}
+}
+
+func TestParseR2AccountsInvalid(t *testing.T) {
+	if _, err := parseR2Accounts(`not-json`); err == nil {
+		t.Fatal("parseR2Accounts() = nil, want error")
+	}
+}
+
+func TestLoadCookieEmpty(t *testing.T) {
+	got, err := loadCookie("")
+	if err != nil {
+		t.Fatalf("loadCookie(\"\") = %v", err)
+	}
+	if got != "" {
+		t.Fatalf("loadCookie(\"\") = %q, want empty", got)
+	}
+}
+
+func TestLoadCookieBuildsHeader(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/c.json"
+	writeTestFile(t, path, `[{"name":"a","value":"1","domain":".x.com"},{"name":"b","value":"2","domain":".x.com"}]`)
+	got, err := loadCookie(path)
+	if err != nil {
+		t.Fatalf("loadCookie() = %v", err)
+	}
+	if got != "a=1; b=2" {
+		t.Fatalf("loadCookie() = %q, want %q", got, "a=1; b=2")
+	}
+}
+
+func TestLoadCookieSkipsEmptyName(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/c.json"
+	writeTestFile(t, path, `[{"name":"","value":"x"},{"name":"a","value":"1"}]`)
+	got, err := loadCookie(path)
+	if err != nil {
+		t.Fatalf("loadCookie() = %v", err)
+	}
+	if got != "a=1" {
+		t.Fatalf("loadCookie() = %q, want %q", got, "a=1")
+	}
+}
+
+func TestLoadCookieMissingFile(t *testing.T) {
+	if _, err := loadCookie("does-not-exist.json"); err == nil {
+		t.Fatal("loadCookie() = nil, want error")
+	}
+}
+
+func TestLoadCookieInvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/c.json"
+	writeTestFile(t, path, `not-json`)
+	if _, err := loadCookie(path); err == nil {
+		t.Fatal("loadCookie() = nil, want error")
+	}
+}
+
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
 	}
 }

@@ -15,10 +15,13 @@ import (
 	"rest-api/internal/downloader"
 	"rest-api/internal/downloader/providers"
 	apphttp "rest-api/internal/http"
+	"rest-api/internal/media"
 	"rest-api/internal/metrics"
 	"rest-api/internal/plans"
 	"rest-api/internal/quota"
+	"rest-api/internal/r2"
 	"rest-api/internal/ratelimit"
+	"rest-api/internal/storage"
 	"rest-api/internal/youtube"
 )
 
@@ -37,6 +40,9 @@ type Application struct {
 	downloader *downloader.Service
 	youtube    *youtube.Service
 	browser    browser.Manager
+	r2         *r2.Manager
+	storage    *storage.Uploader
+	media      *media.Store
 
 	db      *database.DB
 	redis   *cache.Redis
@@ -60,6 +66,8 @@ func New(cfg *config.Config, logger *slog.Logger) (*Application, error) {
 		InstagramCookie: cfg.InstagramCookie,
 		FacebookCookie:  cfg.FacebookCookie,
 		TikTokCookie:    cfg.TikTokCookie,
+		PinterestCookie: cfg.PinterestCookie,
+		ThreadsCookie:   cfg.ThreadsCookie,
 	}); err != nil {
 		return nil, fmt.Errorf("app: register providers: %w", err)
 	}
@@ -116,6 +124,19 @@ func New(cfg *config.Config, logger *slog.Logger) (*Application, error) {
 			a.downloader.SetCache(downloader.NewRedisResultCache(a.redis.Client()), cfg.ResolveCacheTTL)
 			logger.Info("redis ready")
 		}
+	}
+
+	if len(cfg.R2.Accounts) > 0 {
+		mgr, err := r2.NewManager(cfg.R2)
+		if err != nil {
+			return nil, fmt.Errorf("app: build r2 manager: %w", err)
+		}
+		a.r2 = mgr
+		if a.db != nil {
+			a.media = media.NewStore(a.db.Pool())
+		}
+		a.storage = storage.NewUploader(mgr, a.media, logger)
+		logger.Info("r2 ready", "accounts", mgr.Count())
 	}
 
 	var (
@@ -181,6 +202,9 @@ func New(cfg *config.Config, logger *slog.Logger) (*Application, error) {
 		RateLimiter:   rateLimiter,
 		Quota:         quotaSvc,
 		Plans:         policies,
+		Storage:       a.storage,
+		R2:            a.r2,
+		Media:         a.media,
 		ErrorHandler:  errHandler,
 	})
 	a.server = apphttp.NewServer(apphttp.ServerConfig{
