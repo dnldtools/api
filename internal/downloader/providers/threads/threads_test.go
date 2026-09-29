@@ -70,7 +70,7 @@ func TestMediaFromNodeLayouts(t *testing.T) {
 				"video_versions":  []any{map[string]any{"url": "https://cdn.example/v.mp4", "width": float64(1080), "height": float64(1920)}},
 				"image_versions2": map[string]any{"candidates": []any{map[string]any{"url": "https://cdn.example/t.jpg", "width": float64(720), "height": float64(1280)}}},
 			},
-			want: []mediaItem{{kind: "video", url: "https://cdn.example/v.mp4"}},
+			want: []mediaItem{{kind: "video", url: "https://cdn.example/v.mp4", thumb: "https://cdn.example/t.jpg"}},
 		},
 		{
 			name: "image carousel",

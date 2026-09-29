@@ -46,8 +46,9 @@ type Provider struct {
 }
 
 type mediaItem struct {
-	kind string
-	url  string
+	kind  string
+	url   string
+	thumb string
 }
 
 type post struct {
@@ -153,8 +154,14 @@ func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) 
 		switch med.kind {
 		case "video":
 			formats = append(formats, downloader.Format{Type: downloader.MediaVideo, URL: med.url, Quality: "video", Ext: "mp4"})
+			if thumb == "" {
+				thumb = med.thumb
+			}
 		default:
 			formats = append(formats, downloader.Format{Type: downloader.MediaImage, URL: med.url, Quality: fmt.Sprintf("photo-%d", i+1), Ext: "jpg"})
+			if thumb == "" {
+				thumb = med.url
+			}
 		}
 	}
 
@@ -449,7 +456,11 @@ func mediaFromItem(mItem map[string]any) []mediaItem {
 		return out
 	}
 	if vURL, _, _ := pickBestURL(mItem["video_versions"]); vURL != "" {
-		return []mediaItem{{kind: "video", url: vURL}}
+		thumb := ""
+		if tURL, _, _ := imageURL(mItem); tURL != "" {
+			thumb = tURL
+		}
+		return []mediaItem{{kind: "video", url: vURL, thumb: thumb}}
 	}
 	if iURL, _, _ := imageURL(mItem); iURL != "" {
 		return []mediaItem{{kind: "photo", url: iURL}}
