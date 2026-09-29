@@ -30,6 +30,8 @@ const (
 
 var postRe = regexp.MustCompile(`(?i)/post/([A-Za-z0-9_-]+)`)
 
+var shareRe = regexp.MustCompile(`(?i)/share/([A-Za-z0-9_-]+)`)
+
 type Config struct {
 	Timeout    time.Duration
 	UserAgent  string
@@ -95,6 +97,14 @@ func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) 
 	target := strings.TrimSpace(req.URL)
 	target = strings.ReplaceAll(target, "://threads.net", "://www.threads.com")
 	target = strings.ReplaceAll(target, "://www.threads.net", "://www.threads.com")
+
+	if postRe.FindStringSubmatch(target) == nil && shareRe.MatchString(target) {
+		if resolved := resolveShareURL(ctx, p.client, target, p.cookie); resolved != "" {
+			target = resolved
+		} else {
+			return nil, downloader.ErrProviderUnavailable
+		}
+	}
 
 	m := postRe.FindStringSubmatch(target)
 	if m == nil {
@@ -219,6 +229,35 @@ func fetchPage(ctx context.Context, client *http.Client, target, ua, cookie stri
 	resp.Body.Close()
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 && strings.Contains(string(body), "text_post_app_info") {
 		return string(body)
+	}
+	return ""
+}
+
+func resolveShareURL(ctx context.Context, client *http.Client, target, cookie string) string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", defaultUA)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Site", "none")
+	req.Header.Set("Sec-Fetch-User", "?1")
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
+	if cookie != "" {
+		req.Header.Set("Cookie", cookie)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
+	resp.Body.Close()
+	final := resp.Request.URL.String()
+	if postRe.MatchString(final) {
+		return final
 	}
 	return ""
 }

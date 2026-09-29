@@ -1,6 +1,13 @@
 package threads
 
-import "testing"
+import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
 
 func TestMatchesURL(t *testing.T) {
 	p := New()
@@ -109,5 +116,27 @@ func TestMediaFromNodeLayouts(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestResolveShareURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/share/redirect" {
+			http.Redirect(w, r, "/@minhsien09/post/Dd3b2wHETM6", http.StatusFound)
+			return
+		}
+		if r.URL.Path == "/share/shell" {
+			io.WriteString(w, `<html>spa</html>`)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	if got := resolveShareURL(context.Background(), server.Client(), server.URL+"/share/redirect", "sessionid=x"); !strings.Contains(got, "/post/Dd3b2wHETM6") {
+		t.Fatalf("expected resolved post url, got %q", got)
+	}
+	if got := resolveShareURL(context.Background(), server.Client(), server.URL+"/share/shell", ""); got != "" {
+		t.Fatalf("expected empty for non-redirect share, got %q", got)
 	}
 }
