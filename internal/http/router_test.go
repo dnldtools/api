@@ -10,6 +10,7 @@ import (
 
 	"rest-api/internal/downloader"
 	"rest-api/internal/media"
+	"rest-api/internal/music"
 	"rest-api/internal/r2"
 	"rest-api/internal/ratelimit"
 	"rest-api/internal/youtube"
@@ -28,6 +29,11 @@ func newTestRouter(t *testing.T) http.Handler {
 		t.Fatalf("build r2 manager: %v", err)
 	}
 
+	musicSvc, err := music.New(music.Config{Root: "C:\\nonexistent-music-root"}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("build music service: %v", err)
+	}
+
 	return NewRouter(Dependencies{
 		PrettyJSON:  false,
 		Logger:      slog.Default(),
@@ -40,6 +46,7 @@ func newTestRouter(t *testing.T) http.Handler {
 		Quota:       &fakeQuota{},
 		R2:          mgr,
 		Media:       media.NewStore(nil),
+		Music:       musicSvc,
 	})
 }
 

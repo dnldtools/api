@@ -6,6 +6,7 @@ import (
 	"rest-api/internal/browser"
 	"rest-api/internal/downloader"
 	apperrors "rest-api/internal/errors"
+	"rest-api/internal/music"
 	"rest-api/internal/youtube"
 )
 
@@ -19,6 +20,12 @@ func mapError(err error) *apperrors.AppError {
 	}
 
 	switch {
+	case stderrors.Is(err, music.ErrUnsupportedPlatform):
+		return apperrors.UnsupportedPlatform(apperrors.CodeUnsupportedPlatform, "That music platform isn't supported yet.").WithCause(err)
+	case stderrors.Is(err, music.ErrR2Required):
+		return apperrors.ProviderUnavailable("The music CDN isn't configured yet. Please try again later.").WithCause(err)
+	case stderrors.Is(err, music.ErrDownloadFailed):
+		return apperrors.MediaNotFound("We couldn't download that track. It may be restricted or removed.").WithCause(err)
 	case stderrors.Is(err, downloader.ErrInvalidURL):
 		return apperrors.Validation(apperrors.CodeInvalidURL, "Please provide a valid link.").WithCause(err)
 	case stderrors.Is(err, downloader.ErrPlatformUnsupported):

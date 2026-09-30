@@ -17,6 +17,7 @@ import (
 	apphttp "rest-api/internal/http"
 	"rest-api/internal/media"
 	"rest-api/internal/metrics"
+	"rest-api/internal/music"
 	"rest-api/internal/plans"
 	"rest-api/internal/quota"
 	"rest-api/internal/r2"
@@ -43,6 +44,7 @@ type Application struct {
 	r2         *r2.Manager
 	storage    *storage.Uploader
 	media      *media.Store
+	music      *music.Service
 
 	db      *database.DB
 	redis   *cache.Redis
@@ -139,6 +141,18 @@ func New(cfg *config.Config, logger *slog.Logger) (*Application, error) {
 		logger.Info("r2 ready", "accounts", mgr.Count())
 	}
 
+	if cfg.Music.Root != "" {
+		svc, err := music.New(cfg.Music, a.r2, a.media, logger)
+		if err != nil {
+			return nil, fmt.Errorf("app: build music service: %w", err)
+		}
+		svc.SetAppleFallback(func(ctx context.Context, url string) (*downloader.DownloadResult, error) {
+			return a.downloader.Resolve(ctx, downloader.DownloadRequest{URL: url})
+		})
+		a.music = svc
+		logger.Info("music ready", "root", cfg.Music.Root)
+	}
+
 	var (
 		repo metrics.Repository
 		agg  metrics.Aggregator
@@ -205,6 +219,7 @@ func New(cfg *config.Config, logger *slog.Logger) (*Application, error) {
 		Storage:       a.storage,
 		R2:            a.r2,
 		Media:         a.media,
+		Music:         a.music,
 		ErrorHandler:  errHandler,
 	})
 	a.server = apphttp.NewServer(apphttp.ServerConfig{

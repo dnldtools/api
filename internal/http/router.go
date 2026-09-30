@@ -8,6 +8,7 @@ import (
 	"rest-api/internal/downloader"
 	"rest-api/internal/media"
 	"rest-api/internal/metrics"
+	"rest-api/internal/music"
 	"rest-api/internal/plans"
 	"rest-api/internal/quota"
 	"rest-api/internal/r2"
@@ -48,6 +49,8 @@ type Dependencies struct {
 	R2 *r2.Manager
 
 	Media *media.Store
+
+	Music *music.Service
 
 	ErrorHandler *ErrorHandler
 }
@@ -118,6 +121,11 @@ func NewRouter(deps Dependencies) http.Handler {
 
 	if deps.R2 != nil && deps.Media != nil {
 		registerProtected(mux, "GET /v1/media/{id}", handleMediaGet(deps.Media, deps.R2, errHandler), deps, errHandler)
+	}
+
+	if deps.Music != nil && deps.Music.Enabled() {
+		registerProtected(mux, "POST /v1/music/resolve", handleMusicResolve(deps.Music, errHandler), deps, errHandler)
+		registerProtected(mux, "POST /v1/music/download", handleMusicDownload(deps.Music, errHandler), deps, errHandler)
 	}
 
 	registerAdmin(mux, "GET /v1/admin/accounts", handleAdminListAccounts(deps.Admin, errHandler), deps, errHandler)

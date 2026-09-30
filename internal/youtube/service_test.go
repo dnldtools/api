@@ -174,6 +174,7 @@ func TestVideoID(t *testing.T) {
 	}{
 		{"https://www.youtube.com/watch?v=jNQXAC9IVRw", "jNQXAC9IVRw", true},
 		{"https://www.youtube.com/watch?v=jNQXAC9IVRw&list=PL1", "jNQXAC9IVRw", true},
+		{"https://www.youtube.com/watch?v=DjKHWeaNOIE&list=RDDjKHWeaNOIE&start_radio=1", "DjKHWeaNOIE", true},
 		{"https://youtu.be/jNQXAC9IVRw", "jNQXAC9IVRw", true},
 		{"https://www.youtube.com/shorts/abcDEF123_-", "abcDEF123_-", true},
 		{"https://www.youtube.com/embed/jNQXAC9IVRw", "jNQXAC9IVRw", true},

@@ -11,6 +11,7 @@ import (
 	"rest-api/internal/browser"
 	"rest-api/internal/cache"
 	"rest-api/internal/database"
+	"rest-api/internal/music"
 	"rest-api/internal/r2"
 	"rest-api/pkg/env"
 )
@@ -52,6 +53,8 @@ type Config struct {
 	MetricsQueueSize int
 
 	R2 r2.Config
+
+	Music music.Config
 }
 
 func Load() (*Config, error) {
@@ -145,6 +148,19 @@ func Load() (*Config, error) {
 	cfg.R2 = r2.Config{
 		Accounts:   accounts,
 		PresignTTL: env.GetDuration("R2_PRESIGN_TTL", 5*time.Minute),
+	}
+
+	cfg.Music = music.Config{
+		Root:            env.Get("MUSIC_ROOT", ""),
+		AmazonCookie:    env.Get("AMAZON_COOKIE", ""),
+		AppleCookie:     env.Get("APPLE_COOKIE", ""),
+		SoundCloudCookie: env.Get("SOUNDCLOUD_COOKIE", ""),
+		TidalToken:      env.Get("TIDAL_COOKIE", ""),
+		TempDir:         env.Get("MUSIC_TEMP_DIR", ""),
+		Timeout:         env.GetDuration("MUSIC_TIMEOUT", 15*time.Minute),
+		ResolveTimeout:  env.GetDuration("MUSIC_RESOLVE_TIMEOUT", 90*time.Second),
+		DefaultQuality:  env.Get("MUSIC_QUALITY", "hires"),
+		TidalQuality:    env.Get("TIDAL_QUALITY", "HIGH"),
 	}
 
 	if err := cfg.validate(); err != nil {
