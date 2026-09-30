@@ -25,6 +25,27 @@ func TestResolverUsesExplicitPlatform(t *testing.T) {
 	}
 }
 
+func TestResolverNormalizesAppleMusicAlias(t *testing.T) {
+	r := NewRegistry()
+	if err := r.Register(&stubProvider{name: "apple-music", platform: PlatformApple}); err != nil {
+		t.Fatal(err)
+	}
+	resolver := NewResolver(r)
+
+	for _, alias := range []Platform{"apple", "Apple Music", "apple-music", "applemusic"} {
+		got, err := resolver.ResolvePlatform(context.Background(), DownloadRequest{
+			Platform: alias,
+			URL:      "https://music.apple.com/id/album/x/1",
+		})
+		if err != nil {
+			t.Fatalf("ResolvePlatform(%q) error = %v", alias, err)
+		}
+		if got != PlatformApple {
+			t.Errorf("ResolvePlatform(%q) = %q, want %q", alias, got, PlatformApple)
+		}
+	}
+}
+
 func TestResolverExplicitPlatformMustBeRegistered(t *testing.T) {
 	r := NewRegistry()
 	if err := r.Register(&stubProvider{name: "facebook", platform: PlatformFacebook}); err != nil {

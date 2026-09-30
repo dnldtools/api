@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -34,7 +35,7 @@ func handleDownload(svc *downloader.Service, uploader *storage.Uploader, errHand
 		}
 
 		if uploader != nil && uploader.ShouldMirror(result.Platform) {
-			uploader.Mirror(r.Context(), svc, result)
+			go uploader.Mirror(context.Background(), svc, cloneDownloadResult(result))
 		} else if result.Platform == downloader.PlatformTikTok {
 			base := strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
 			if base == "" {
@@ -45,4 +46,22 @@ func handleDownload(svc *downloader.Service, uploader *storage.Uploader, errHand
 
 		WriteSuccess(w, r, http.StatusOK, result)
 	}
+}
+
+func cloneDownloadResult(src *downloader.DownloadResult) *downloader.DownloadResult {
+	if src == nil {
+		return nil
+	}
+	clone := *src
+	if src.Formats != nil {
+		clone.Formats = make([]downloader.Format, len(src.Formats))
+		copy(clone.Formats, src.Formats)
+	}
+	if src.Metadata != nil {
+		clone.Metadata = make(map[string]string, len(src.Metadata))
+		for k, v := range src.Metadata {
+			clone.Metadata[k] = v
+		}
+	}
+	return &clone
 }

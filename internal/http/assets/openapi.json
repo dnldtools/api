@@ -13,7 +13,8 @@
   ],
   "tags": [
     { "name": "Downloads", "description": "Resolve media URLs and stream resolved files." },
-    { "name": "YouTube", "description": "Search, inspect, and convert YouTube videos." }
+    { "name": "YouTube", "description": "Search, inspect, and convert YouTube videos." },
+    { "name": "Music", "description": "Get info and download tracks/albums from Apple Music, Amazon Music, Tidal, and SoundCloud." }
   ],
   "security": [
     { "apiKey": [] }
@@ -53,7 +54,8 @@
           "401": { "$ref": "#/components/responses/Unauthorized" },
           "404": { "$ref": "#/components/responses/NotFound" },
           "429": { "$ref": "#/components/responses/RateLimited" },
-          "502": { "$ref": "#/components/responses/ProviderUnavailable" },
+          "502": { "$ref": "#/components/responses/ProviderInvalidResponse" },
+          "503": { "$ref": "#/components/responses/ProviderUnavailable" },
           "504": { "$ref": "#/components/responses/ProviderTimeout" }
         }
       }
@@ -83,6 +85,72 @@
         }
       }
     },
+    "/v1/music/info": {
+      "post": {
+        "tags": ["Music"],
+        "summary": "Get music info",
+        "description": "Returns metadata for a supported music URL: title, artist, album, artwork, duration, and the full track listing for albums and playlists. No audio is downloaded.",
+        "operationId": "musicInfo",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/MusicRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Music info retrieved successfully.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MusicEnvelope" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/MediaNotFound" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "502": { "$ref": "#/components/responses/ProviderInvalidResponse" },
+          "503": { "$ref": "#/components/responses/ProviderUnavailable" },
+          "504": { "$ref": "#/components/responses/ProviderTimeout" }
+        }
+      }
+    },
+    "/v1/music/download": {
+      "post": {
+        "tags": ["Music"],
+        "summary": "Download a track or album",
+        "description": "Downloads the track(s) and returns one ready-to-play URL per track. Albums and playlists return every track.",
+        "operationId": "musicDownload",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/MusicRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Music downloaded successfully.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MusicEnvelope" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/MediaNotFound" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "502": { "$ref": "#/components/responses/ProviderInvalidResponse" },
+          "503": { "$ref": "#/components/responses/ProviderUnavailable" },
+          "504": { "$ref": "#/components/responses/ProviderTimeout" }
+        }
+      }
+    },
     "/v1/youtube/search": {
       "get": {
         "tags": ["YouTube"],
@@ -104,7 +172,9 @@
           "400": { "$ref": "#/components/responses/BadRequest" },
           "401": { "$ref": "#/components/responses/Unauthorized" },
           "429": { "$ref": "#/components/responses/RateLimited" },
-          "502": { "$ref": "#/components/responses/ProviderUnavailable" }
+          "502": { "$ref": "#/components/responses/ProviderInvalidResponse" },
+          "503": { "$ref": "#/components/responses/ProviderUnavailable" },
+          "504": { "$ref": "#/components/responses/ProviderTimeout" }
         }
       }
     },
@@ -123,7 +193,10 @@
             }
           },
           "401": { "$ref": "#/components/responses/Unauthorized" },
-          "429": { "$ref": "#/components/responses/RateLimited" }
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "502": { "$ref": "#/components/responses/ProviderInvalidResponse" },
+          "503": { "$ref": "#/components/responses/ProviderUnavailable" },
+          "504": { "$ref": "#/components/responses/ProviderTimeout" }
         }
       }
     },
@@ -153,7 +226,8 @@
           "400": { "$ref": "#/components/responses/BadRequest" },
           "401": { "$ref": "#/components/responses/Unauthorized" },
           "429": { "$ref": "#/components/responses/RateLimited" },
-          "502": { "$ref": "#/components/responses/ProviderUnavailable" },
+          "502": { "$ref": "#/components/responses/ProviderInvalidResponse" },
+          "503": { "$ref": "#/components/responses/ProviderUnavailable" },
           "504": { "$ref": "#/components/responses/ProviderTimeout" }
         }
       }
@@ -186,18 +260,27 @@
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
       },
       "ProviderUnavailable": {
-        "description": "Upstream download service unavailable.",
+        "description": "Upstream download service unavailable (503). Retryable.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+      },
+      "ProviderInvalidResponse": {
+        "description": "Upstream returned an unexpected or unparseable response (502).",
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
       },
       "ProviderTimeout": {
         "description": "Upstream download service timed out.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+      },
+      "MediaNotFound": {
+        "description": "The requested media could not be found. The URL may be incorrect, the content may be region-locked, or it may have been removed from the platform.",
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
       }
     },
     "schemas": {
       "Platform": {
         "type": "string",
-        "enum": ["facebook", "instagram", "tiktok", "shopee", "apple", "uc-share", "doodstream", "pinterest", "youtube", "9xbuddy", "savefrom", "x", "threads"]
+        "description": "Optional platform hint for `POST /v1/downloads`. When omitted, the platform is detected from the URL. YouTube is intentionally excluded from this enum — YouTube URLs are served by the dedicated YouTube endpoints.",
+        "enum": ["facebook", "instagram", "tiktok", "shopee", "apple-music", "uc-share", "doodstream", "pinterest", "9xbuddy", "savefrom", "x", "threads"]
       },
       "MediaType": {
         "type": "string",
@@ -396,6 +479,102 @@
           "timestamp": { "type": "string", "format": "date-time" }
         },
         "required": ["success", "error"]
+      },
+      "MusicPlatform": {
+        "type": "string",
+        "enum": ["apple-music", "amazon", "tidal", "soundcloud"],
+        "description": "Supported music platforms."
+      },
+      "MusicRequest": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Full URL to the music resource. Supported domains: music.apple.com, music.amazon.com, tidal.com, soundcloud.com."
+          }
+        },
+        "required": ["url"]
+      },
+      "MusicTrack": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "description": "Platform-specific track identifier (ASIN for Amazon, catalog ID for Apple/Tidal, SoundCloud permalink)." },
+          "title": { "type": "string" },
+          "artist": { "type": "string" },
+          "album": { "type": "string" },
+          "track_number": { "type": "integer" },
+          "disc_number": { "type": "integer" },
+          "duration_ms": { "type": "integer", "format": "int64", "description": "Track duration in milliseconds." },
+          "isrc": { "type": "string", "description": "International Standard Recording Code." },
+          "explicit": { "type": "boolean" },
+          "artwork": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "Map of artwork size to URL, e.g. {\"1400\": \"https://...\", \"500\": \"https://...\"}."
+          },
+          "preview_url": { "type": "string", "format": "uri", "description": "Short preview clip URL (30s for Apple/Amazon)." },
+          "url": { "type": "string", "format": "uri", "description": "Download URL for this track. Only present after download." },
+          "ext": { "type": "string", "description": "File extension of the downloaded file (flac, m4a, mp3, ogg)." },
+          "size": { "type": "integer", "format": "int64", "description": "File size in bytes. Only present after download." },
+          "metadata": { "type": "object", "additionalProperties": {}, "description": "Raw platform metadata." }
+        },
+        "required": ["id", "title"]
+      },
+      "MusicFormat": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "description": "Format type: aac, alac, flac, mp3, ogg, opus." },
+          "url": { "type": "string", "format": "uri" },
+          "ext": { "type": "string" },
+          "size": { "type": "integer", "format": "int64" },
+          "media_id": { "type": "integer", "format": "int64", "description": "Media identifier for this file." }
+        },
+        "required": ["type", "url"]
+      },
+      "MusicResult": {
+        "type": "object",
+        "properties": {
+          "platform": { "$ref": "#/components/schemas/MusicPlatform" },
+          "type": { "type": "string", "enum": ["track", "album", "playlist", "artist"], "description": "Type of music resource." },
+          "url": { "type": "string", "format": "uri", "description": "Original input URL." },
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "artist": { "type": "string" },
+          "album": { "type": "string" },
+          "year": { "type": "string" },
+          "track_count": { "type": "integer", "description": "Number of tracks (for albums/playlists)." },
+          "duration_ms": { "type": "integer", "format": "int64" },
+          "thumbnail": { "type": "string", "format": "uri" },
+          "artwork": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "tracks": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/MusicTrack" },
+            "description": "Track listing (for albums/playlists) or single-element array for tracks."
+          },
+          "formats": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/MusicFormat" },
+            "description": "Available download formats. Only present after download."
+          },
+          "metadata": { "type": "object", "additionalProperties": {} }
+        },
+        "required": ["platform", "type", "url"]
+      },
+      "MusicEnvelope": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "message": { "type": "string" },
+          "data": { "$ref": "#/components/schemas/MusicResult" },
+          "error": { "$ref": "#/components/schemas/ErrorPayload" },
+          "request_id": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time" }
+        },
+        "required": ["success", "data"]
       }
     }
   }

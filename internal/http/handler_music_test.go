@@ -46,7 +46,7 @@ func musicRouter(t *testing.T, withMusic bool) http.Handler {
 
 func TestMusicRoutesNotRegisteredWithoutService(t *testing.T) {
 	router := musicRouter(t, false)
-	for _, path := range []string{"/v1/music/resolve", "/v1/music/download"} {
+	for _, path := range []string{"/v1/music/info", "/v1/music/download"} {
 		rec := postMusic(t, router, path, testAPIKey, `{"url":"https://soundcloud.com/a/b"}`)
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("POST %s without music service = %d, want 404", path, rec.Code)
@@ -56,10 +56,18 @@ func TestMusicRoutesNotRegisteredWithoutService(t *testing.T) {
 
 func TestMusicRoutesRegisteredWithService(t *testing.T) {
 	router := musicRouter(t, true)
-	for _, path := range []string{"/v1/music/resolve", "/v1/music/download"} {
-		rec := postMusic(t, router, path, testAPIKey, `{"url":"https://soundcloud.com/a/b"}`)
-		if rec.Code == http.StatusNotFound {
-			t.Errorf("POST %s with music service = 404, want registered route", path)
+	cases := []struct {
+		path string
+		body string
+		want int
+	}{
+		{"/v1/music/info", `{"url":"https://example.com/x"}`, http.StatusBadRequest},
+		{"/v1/music/download", `{"url":"https://soundcloud.com/a/b"}`, http.StatusServiceUnavailable},
+	}
+	for _, tc := range cases {
+		rec := postMusic(t, router, tc.path, testAPIKey, tc.body)
+		if rec.Code != tc.want {
+			t.Errorf("POST %s with music service = %d, want %d", tc.path, rec.Code, tc.want)
 		}
 	}
 }
@@ -67,17 +75,17 @@ func TestMusicRoutesRegisteredWithService(t *testing.T) {
 func TestMusicResolveValidation(t *testing.T) {
 	router := musicRouter(t, true)
 
-	rec := postMusic(t, router, "/v1/music/resolve", testAPIKey, `{"url":""}`)
+	rec := postMusic(t, router, "/v1/music/info", testAPIKey, `{"url":""}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("missing url = %d, want 400", rec.Code)
 	}
 
-	rec = postMusic(t, router, "/v1/music/resolve", testAPIKey, `not-json`)
+	rec = postMusic(t, router, "/v1/music/info", testAPIKey, `not-json`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad json = %d, want 400", rec.Code)
 	}
 
-	rec = postMusic(t, router, "/v1/music/resolve", testAPIKey, `{"url":"https://example.com/x"}`)
+	rec = postMusic(t, router, "/v1/music/info", testAPIKey, `{"url":"https://example.com/x"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("unsupported platform = %d, want 400 body=%s", rec.Code, rec.Body.String())
 	}

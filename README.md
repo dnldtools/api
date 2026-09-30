@@ -1,16 +1,19 @@
 # rest-api
 
 REST API untuk mengunduh media dari berbagai platform (saat ini Facebook,
-Instagram, TikTok, Shopee, 9xbuddy, SaveFrom, dan YouTube; platform lain
+Instagram, TikTok, Shopee, Apple Music, UC Drive (uc-share), DoodStream,
+Pinterest, X, Threads, 9xbuddy, SaveFrom, dan YouTube; platform lain
 menyusul).
 
 > **Status:** Facebook sudah terimplementasi (via fget.io), Instagram
 > (official API relay + snapinsta fallback), TikTok (official
 > rehydration langsung sebagai utama + snaptik fallback), Shopee (official
-> watermark + shopeenowatermark lewat proxy), 9xbuddy (all-in-one scraper
-> fallback via 9xbuddy.site), SaveFrom (scraper via worker savefrom.net),
-> dan YouTube (search + format catalog + konversi via convert1s). Platform lain
-> ditambahkan sesuai scraper yang dikirim kemudian.
+> watermark + shopeenowatermark lewat proxy), Apple Music (aapl + aplmate),
+> UC Drive (uc-share.com), DoodStream, Pinterest, X, Threads, 9xbuddy
+> (all-in-one scraper fallback via 9xbuddy.site), SaveFrom (scraper via
+> worker savefrom.net), dan YouTube (search + format catalog + konversi via
+> convert1s). Platform lain ditambahkan sesuai scraper yang dikirim
+> kemudian.
 
 ---
 
@@ -69,7 +72,7 @@ rest-api/
 │   ├── ratelimit/           # Rate limiter jendela-pendek (Redis + in-memory)
 │   ├── quota/               # Kuota harian/bulanan (Postgres source of truth)
 │   ├── downloader/          # Domain + engine (types, Provider/Resolver interface, Registry, Service)
-│   │   └── providers/       # Adapter platform (facebook, instagram, tiktok, shopee, apple, ninexbuddy)
+│   │   └── providers/       # Adapter platform (facebook, instagram, tiktok, shopee, apple-music, uc-share, doodstream, pinterest, x, threads, youtube, ninexbuddy, savefrom)
 │   ├── youtube/             # Layanan YouTube (search, formats, convert) via convert1s
 │   ├── browser/             # Abstraksi browser automation + adapter Playwright
 │   ├── database/            # PostgreSQL: connection pool + migration runner

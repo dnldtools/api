@@ -1,0 +1,9 @@
+{
+  "name": "apple-music-scraper",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Apple Music catalog scraper - metadata, artwork, preview downloads (URL-first CLI)",
+  "scripts": {
+    "start": "node apple.js"
+  }
+}

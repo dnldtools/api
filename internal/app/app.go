@@ -141,7 +141,7 @@ func New(cfg *config.Config, logger *slog.Logger) (*Application, error) {
 		logger.Info("r2 ready", "accounts", mgr.Count())
 	}
 
-	if cfg.Music.Root != "" {
+	if cfg.MusicEnabled {
 		svc, err := music.New(cfg.Music, a.r2, a.media, logger)
 		if err != nil {
 			return nil, fmt.Errorf("app: build music service: %w", err)
@@ -150,7 +150,7 @@ func New(cfg *config.Config, logger *slog.Logger) (*Application, error) {
 			return a.downloader.Resolve(ctx, downloader.DownloadRequest{URL: url})
 		})
 		a.music = svc
-		logger.Info("music ready", "root", cfg.Music.Root)
+		logger.Info("music ready", "root", svc.Root(), "device", svc.DeviceWVD())
 	}
 
 	var (

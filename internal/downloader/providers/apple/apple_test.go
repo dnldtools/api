@@ -18,11 +18,11 @@ const testAppleURL = "https://music.apple.com/id/album/rodecia-single/6790279558
 
 func TestProviderContract(t *testing.T) {
 	p := New()
-	if p.Name() != "apple" {
-		t.Errorf("Name() = %q, want apple", p.Name())
+	if p.Name() != "apple-music" {
+		t.Errorf("Name() = %q, want apple-music", p.Name())
 	}
 	if p.Platform() != downloader.PlatformApple {
-		t.Errorf("Platform() = %q, want apple", p.Platform())
+		t.Errorf("Platform() = %q, want apple-music", p.Platform())
 	}
 	if p.Type() != downloader.ProviderExternalAPI {
 		t.Errorf("Type() = %q, want external_api", p.Type())

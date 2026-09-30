@@ -153,7 +153,7 @@ func NewWithConfig(cfg Config) *Provider {
 	}
 }
 
-func (p *Provider) Name() string { return "apple" }
+func (p *Provider) Name() string { return "apple-music" }
 
 func (p *Provider) Platform() downloader.Platform { return downloader.PlatformApple }
 

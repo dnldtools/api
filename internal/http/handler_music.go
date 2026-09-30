@@ -9,11 +9,10 @@ import (
 )
 
 type musicRequest struct {
-	URL     string `json:"url"`
-	Quality string `json:"quality"`
+	URL string `json:"url"`
 }
 
-func handleMusicResolve(svc *music.Service, errHandler *ErrorHandler) http.HandlerFunc {
+func handleMusicInfo(svc *music.Service, errHandler *ErrorHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req musicRequest
 		if err := decodeJSON(r, &req); err != nil {
@@ -50,7 +49,7 @@ func handleMusicDownload(svc *music.Service, errHandler *ErrorHandler) http.Hand
 			_ = rc.SetWriteDeadline(time.Now().Add(svc.Timeout() + time.Minute))
 		}
 
-		result, err := svc.Download(r.Context(), req.URL, req.Quality)
+		result, err := svc.Download(r.Context(), req.URL)
 		if err != nil {
 			errHandler.Handle(w, r, err)
 			return

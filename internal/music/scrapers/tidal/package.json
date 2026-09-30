@@ -1,0 +1,11 @@
+{
+  "name": "tidal-scraper",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "description": "Tidal metadata + playbackinfo + download helper (zero-dep Node ESM)",
+  "scripts": {
+    "login": "node tidal.js login",
+    "search": "node tidal.js search"
+  }
+}

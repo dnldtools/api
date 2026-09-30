@@ -61,6 +61,10 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	return r.ResponseWriter.Write(b)
 }
 
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
+}
+
 func requestIDFromContext(ctx context.Context) string {
 	if id, ok := ctx.Value(ctxRequestID).(string); ok {
 		return id

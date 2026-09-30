@@ -124,7 +124,7 @@ func NewRouter(deps Dependencies) http.Handler {
 	}
 
 	if deps.Music != nil && deps.Music.Enabled() {
-		registerProtected(mux, "POST /v1/music/resolve", handleMusicResolve(deps.Music, errHandler), deps, errHandler)
+		registerProtected(mux, "POST /v1/music/info", handleMusicInfo(deps.Music, errHandler), deps, errHandler)
 		registerProtected(mux, "POST /v1/music/download", handleMusicDownload(deps.Music, errHandler), deps, errHandler)
 	}
 

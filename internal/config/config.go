@@ -55,6 +55,7 @@ type Config struct {
 	R2 r2.Config
 
 	Music music.Config
+	MusicEnabled bool
 }
 
 func Load() (*Config, error) {
@@ -151,17 +152,18 @@ func Load() (*Config, error) {
 	}
 
 	cfg.Music = music.Config{
-		Root:            env.Get("MUSIC_ROOT", ""),
-		AmazonCookie:    env.Get("AMAZON_COOKIE", ""),
-		AppleCookie:     env.Get("APPLE_COOKIE", ""),
+		Root:             env.Get("MUSIC_ROOT", ""),
+		DeviceWVD:        env.Get("MUSIC_DEVICE_WVD", ""),
+		AmazonCookie:     env.Get("AMAZON_COOKIE", ""),
+		AppleCookie:      env.Get("APPLE_COOKIE", ""),
 		SoundCloudCookie: env.Get("SOUNDCLOUD_COOKIE", ""),
-		TidalToken:      env.Get("TIDAL_COOKIE", ""),
-		TempDir:         env.Get("MUSIC_TEMP_DIR", ""),
-		Timeout:         env.GetDuration("MUSIC_TIMEOUT", 15*time.Minute),
-		ResolveTimeout:  env.GetDuration("MUSIC_RESOLVE_TIMEOUT", 90*time.Second),
-		DefaultQuality:  env.Get("MUSIC_QUALITY", "hires"),
-		TidalQuality:    env.Get("TIDAL_QUALITY", "HIGH"),
+		TidalToken:       env.Get("TIDAL_COOKIE", ""),
+		TempDir:          env.Get("MUSIC_TEMP_DIR", ""),
+		Timeout:          env.GetDuration("MUSIC_TIMEOUT", 15*time.Minute),
+		ResolveTimeout:   env.GetDuration("MUSIC_RESOLVE_TIMEOUT", 90*time.Second),
+		TidalQuality:     env.Get("TIDAL_QUALITY", "LOSSLESS"),
 	}
+	cfg.MusicEnabled = env.GetBool("MUSIC_ENABLED", true)
 
 	if err := cfg.validate(); err != nil {
 		return nil, err

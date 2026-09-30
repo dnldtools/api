@@ -237,6 +237,38 @@ func TestDownloadAutoDetectsPlatform(t *testing.T) {
 	}
 }
 
+func TestCloneDownloadResultIsolatesFormats(t *testing.T) {
+	src := &downloader.DownloadResult{
+		Platform: downloader.PlatformFacebook,
+		URL:      "https://www.facebook.com/reel/1",
+		Formats: []downloader.Format{
+			{Type: downloader.MediaVideo, URL: "https://cdn.example/v.mp4", Ext: "mp4"},
+		},
+		Metadata: map[string]string{"source": "facebook_native"},
+	}
+
+	clone := cloneDownloadResult(src)
+	if clone == src {
+		t.Fatal("clone is the same pointer as src")
+	}
+	clone.Formats[0].URL = "https://r2.example/v.mp4"
+	clone.Formats[0].MediaID = 42
+	clone.Metadata["source"] = "mirrored"
+
+	if src.Formats[0].URL != "https://cdn.example/v.mp4" {
+		t.Errorf("src format url mutated: %q", src.Formats[0].URL)
+	}
+	if src.Formats[0].MediaID != 0 {
+		t.Errorf("src media id mutated: %d", src.Formats[0].MediaID)
+	}
+	if src.Metadata["source"] != "facebook_native" {
+		t.Errorf("src metadata mutated: %q", src.Metadata["source"])
+	}
+	if cloneDownloadResult(nil) != nil {
+		t.Error("cloneDownloadResult(nil) != nil")
+	}
+}
+
 func TestDownloadInternalErrorDoesNotLeak(t *testing.T) {
 	const secret = "db-password=hunter2"
 

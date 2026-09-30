@@ -39,7 +39,7 @@ func TestDownloadAppleProviderThroughHandler(t *testing.T) {
 	defer upstream.Close()
 
 	router := newRouterWithService(t, registryWithApple(t, upstream.URL, upstream.URL+"/nope"))
-	rec := postDownload(t, router, testAPIKey, `{"platform":"apple","url":"https://music.apple.com/id/album/rodecia-single/6790279558"}`)
+	rec := postDownload(t, router, testAPIKey, `{"platform":"apple-music","url":"https://music.apple.com/id/album/rodecia-single/6790279558"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -64,7 +64,7 @@ func TestDownloadAppleProviderThroughHandler(t *testing.T) {
 	if !envelope.Success {
 		t.Error("success = false")
 	}
-	if envelope.Data.Platform != "apple" {
+	if envelope.Data.Platform != "apple-music" {
 		t.Errorf("platform = %q", envelope.Data.Platform)
 	}
 	if envelope.Data.Type != "audio" {

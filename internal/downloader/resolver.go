@@ -1,6 +1,9 @@
 package downloader
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 type PlatformResolver interface {
 	ResolvePlatform(ctx context.Context, req DownloadRequest) (Platform, error)
@@ -14,12 +17,28 @@ func NewResolver(registry *Registry) *Resolver {
 	return &Resolver{registry: registry}
 }
 
+var platformAliases = map[string]Platform{
+	"apple":       PlatformApple,
+	"apple music": PlatformApple,
+	"apple-music": PlatformApple,
+	"applemusic":  PlatformApple,
+}
+
+func normalizePlatform(p Platform) Platform {
+	key := strings.ToLower(strings.TrimSpace(string(p)))
+	if alias, ok := platformAliases[key]; ok {
+		return alias
+	}
+	return p
+}
+
 func (r *Resolver) ResolvePlatform(_ context.Context, req DownloadRequest) (Platform, error) {
 	if req.Platform != "" {
-		if _, err := r.registry.Get(req.Platform); err != nil {
+		platform := normalizePlatform(req.Platform)
+		if _, err := r.registry.Get(platform); err != nil {
 			return "", err
 		}
-		return req.Platform, nil
+		return platform, nil
 	}
 
 	for _, p := range r.registry.All() {

@@ -1,0 +1,15 @@
+{
+  "name": "amazon-music-scraper",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "description": "Zero-dep Amazon Music catalog + search + preview scraper (anonymous FireFly GraphQL + Tenzing textsearch).",
+  "scripts": {
+    "search": "node amazon.js search",
+    "track": "node amazon.js track",
+    "album": "node amazon.js album",
+    "artist": "node amazon.js artist",
+    "playlist": "node amazon.js playlist",
+    "preview": "node amazon.js preview"
+  }
+}

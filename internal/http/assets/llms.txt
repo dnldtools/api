@@ -23,7 +23,7 @@ Resolve a media link and return every available format plus metadata.
 Request body (JSON):
 
 - url (string, required) - the link to resolve
-- platform (string, optional) - hint: facebook, instagram, tiktok, shopee, apple, uc-share, doodstream, pinterest, youtube, 9xbuddy, savefrom, x, threads
+- platform (string, optional) - hint: facebook, instagram, tiktok, shopee, apple-music, uc-share, doodstream, pinterest, 9xbuddy, savefrom, x, threads. YouTube is not a hint value; YouTube links are handled by the /v1/youtube endpoints.
 
 Response data (JSON):
 
@@ -99,6 +99,46 @@ Response data:
 - download_url (string)
 - cover (string)
 
+## POST /v1/music/info
+
+Resolve a music URL from Apple Music, Amazon Music, Tidal, or SoundCloud. Returns track/album metadata and artwork without downloading any audio.
+
+Supported URL patterns:
+- Apple Music: music.apple.com/.../album/... or .../playlist/...
+- Amazon Music: music.amazon.com/albums/ASIN, music.amazon.com/tracks/ASIN, or direct ASIN
+- Tidal: tidal.com/browse/track/ID, tidal.com/browse/album/ID, or listen.tidal.com/...
+- SoundCloud: soundcloud.com/artist/track-name
+
+Request body (JSON):
+- url (string, required) - full music URL
+
+Response data:
+- platform (string) - apple-music | amazon | tidal | soundcloud
+- type (string) - track | album | playlist | artist
+- url (string) - original input URL
+- id (string) - platform-specific identifier (ASIN for Amazon, catalog ID for Apple Music/Tidal, permalink for SoundCloud)
+- title (string)
+- artist (string)
+- album (string, optional)
+- year (string, optional)
+- track_count (integer, optional) - for albums/playlists
+- duration_ms (integer, optional)
+- thumbnail (string, optional) - artwork URL
+- artwork (object) - map of size -> URL, e.g. {"1400": "https://..."}
+- tracks (array, optional) - for albums/playlists: each has id, title, artist, album, duration_ms, isrc, explicit, artwork, preview_url
+
+## POST /v1/music/download
+
+Download a music track or album. Resolves the URL, downloads at the best available quality, uploads to R2 storage, and returns permanent download links.
+
+Request body (JSON):
+- url (string, required) - full music URL
+
+Response data (same shape as info, plus download info):
+- platform, type, url, id, title, artist, album, year, track_count, duration_ms, thumbnail, artwork
+- tracks (array) - each track now includes: url (R2 download link), ext (flac/m4a/mp3/ogg), size (bytes)
+- formats (array) - available download formats with type, url, ext, size
+
 ## Supported platforms
 
-facebook, instagram, tiktok, shopee, apple, uc-share, doodstream, pinterest, youtube, 9xbuddy, savefrom, x, threads
+facebook, instagram, tiktok, shopee, apple-music, uc-share, doodstream, pinterest, 9xbuddy, savefrom, x, threads, youtube (separate /v1/youtube endpoints), amazon / apple-music / tidal / soundcloud (music)

@@ -9,7 +9,7 @@ const (
 	PlatformInstagram  Platform = "instagram"
 	PlatformTikTok     Platform = "tiktok"
 	PlatformShopee     Platform = "shopee"
-	PlatformApple      Platform = "apple"
+	PlatformApple      Platform = "apple-music"
 	PlatformUCShare    Platform = "uc-share"
 	PlatformDoodstream Platform = "doodstream"
 	PlatformPinterest  Platform = "pinterest"

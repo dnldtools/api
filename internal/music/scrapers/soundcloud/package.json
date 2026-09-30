@@ -1,0 +1,9 @@
+{
+  "name": "soundcloud-scraper",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "SoundCloud scraper/downloader - metadata + full DRM-free mp3 (URL-first CLI)",
+  "scripts": {
+    "start": "node soundcloud.js"
+  }
+}

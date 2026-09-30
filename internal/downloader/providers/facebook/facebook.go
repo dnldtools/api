@@ -172,7 +172,8 @@ func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) 
 	}
 
 	if p.nativeEnabled {
-		if native, nerr := p.queryNative(ctx, req.URL); nerr == nil && native != nil && len(native.Formats) > 0 {
+		native, nerr := p.queryNative(ctx, req.URL)
+		if nerr == nil && native != nil && len(native.Formats) > 0 {
 			native.Platform = downloader.PlatformFacebook
 			if native.URL == "" {
 				native.URL = req.URL
@@ -271,9 +272,13 @@ func (p *Provider) queryNative(ctx context.Context, inputURL string) (*downloade
 	sd := firstNativeURL(body, reFBNativeSD)
 	hdImage := firstNativeImage(body)
 
+	if hd == "" && sd == "" {
+		hd, sd = parseDashVideoURLs(body)
+	}
+
 	formats := make([]downloader.Format, 0, 3)
 	var mediaType downloader.MediaType
-	if hd != "" || sd != "" || ogVideo != "" || strings.Contains(clean, "/reel/") || strings.Contains(clean, "/watch/") {
+	if hd != "" || sd != "" || ogVideo != "" || strings.Contains(clean, "/reel/") || strings.Contains(clean, "/watch/") || strings.Contains(clean, "/videos/") || strings.Contains(clean, "/share/v/") {
 		mediaType = downloader.MediaVideo
 		if hd != "" {
 			formats = append(formats, downloader.Format{Type: downloader.MediaVideo, URL: hd, Quality: "hd", Ext: "mp4"})
@@ -294,6 +299,11 @@ func (p *Provider) queryNative(ctx context.Context, inputURL string) (*downloade
 	}
 
 	if len(formats) == 0 {
+		return nil, downloader.ErrMediaNotFound
+	}
+
+	looksLikeVideo := strings.Contains(clean, "/reel/") || strings.Contains(clean, "/watch/") || strings.Contains(clean, "/videos/") || strings.Contains(clean, "/share/v/")
+	if looksLikeVideo && mediaType != downloader.MediaVideo {
 		return nil, downloader.ErrMediaNotFound
 	}
 
@@ -429,6 +439,37 @@ func (p *Provider) querySnapX(ctx context.Context, mediaURL string) (*downloader
 		return nil, downloader.ErrMediaNotFound
 	}
 	return p.snapx.Facebook(ctx, mediaURL)
+}
+
+func parseDashVideoURLs(body string) (hd, sd string) {
+	idx := strings.Index(body, `"manifest_xml":"`)
+	if idx < 0 {
+		return "", ""
+	}
+	jsonStart := idx + len(`"manifest_xml":`)
+	decoder := json.NewDecoder(strings.NewReader(body[jsonStart:]))
+	var xmlStr string
+	if decoder.Decode(&xmlStr) != nil {
+		return "", ""
+	}
+
+	re := regexp.MustCompile(`<BaseURL>([^<]+)</BaseURL>`)
+	bases := re.FindAllStringSubmatch(xmlStr, -1)
+	if len(bases) == 0 {
+		return "", ""
+	}
+
+	videoURLs := []string{}
+	for _, b := range bases {
+		u := html.UnescapeString(b[1])
+		if strings.Contains(u, "fbcdn.net") && strings.Contains(u, ".mp4") {
+			videoURLs = append(videoURLs, u)
+		}
+	}
+	if len(videoURLs) == 0 {
+		return "", ""
+	}
+	return videoURLs[0], videoURLs[1%len(videoURLs)]
 }
 
 func (p *Provider) applyHeaders(r *http.Request) {

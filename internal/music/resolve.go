@@ -12,6 +12,19 @@ import (
 	"time"
 )
 
+func isNotFound(err error, stderr string) bool {
+	lower := strings.ToLower(stderr)
+	return strings.Contains(lower, "404") ||
+		strings.Contains(lower, "not found") ||
+		strings.Contains(lower, "can't resolve") ||
+		strings.Contains(lower, "cannot resolve") ||
+		strings.Contains(lower, "resource with requested") ||
+		strings.Contains(lower, "no asin") ||
+		strings.Contains(lower, "cannot read properties of null") ||
+		strings.Contains(lower, "unexpected token '<'") ||
+		strings.Contains(lower, "json.parse")
+}
+
 func (s *Service) resolve(ctx context.Context, p Platform, url string) (*resolveData, error) {
 	switch p {
 	case PlatformAmazon:
@@ -195,6 +208,9 @@ func pickThumb(a map[string]string) string {
 func (s *Service) resolveAmazon(ctx context.Context, url string) (*resolveData, error) {
 	out, stderr, err := s.run(ctx, s.cfg.NodeBin, s.amazonDir, []string{"amazon.js", "resolve", url, "--limit", "100"}, PlatformAmazon)
 	if err != nil {
+		if isNotFound(err, stderr) {
+			return nil, fmt.Errorf("%w: %s", ErrNotFound, strings.TrimSpace(stderr))
+		}
 		return nil, fmt.Errorf("music: amazon resolve: %w: %s", err, strings.TrimSpace(stderr))
 	}
 	raw, err := parseJSON(out)
@@ -280,6 +296,9 @@ func (s *Service) resolveApple(ctx context.Context, url string) (*resolveData, e
 		}
 		out, stderr, err := s.run(ctx, s.cfg.NodeBin, s.appleDir, []string{"apple.js", "song", sid, "--sf", sf}, PlatformApple)
 		if err != nil {
+			if isNotFound(err, stderr) {
+				return nil, fmt.Errorf("%w: %s", ErrNotFound, strings.TrimSpace(stderr))
+			}
 			return nil, fmt.Errorf("music: apple song: %w: %s", err, strings.TrimSpace(stderr))
 		}
 		raw, err := parseJSON(out)
@@ -306,6 +325,9 @@ func (s *Service) resolveApple(ctx context.Context, url string) (*resolveData, e
 	if typ == "album" {
 		metaOut, stderr, err := s.run(ctx, s.cfg.NodeBin, s.appleDir, []string{"apple.js", "album", id, "--sf", sf}, PlatformApple)
 		if err != nil {
+			if isNotFound(err, stderr) {
+				return nil, fmt.Errorf("%w: %s", ErrNotFound, strings.TrimSpace(stderr))
+			}
 			return nil, fmt.Errorf("music: apple album: %w: %s", err, strings.TrimSpace(stderr))
 		}
 		meta, err := parseJSON(metaOut)
@@ -314,6 +336,9 @@ func (s *Service) resolveApple(ctx context.Context, url string) (*resolveData, e
 		}
 		tracksOut, stderr, err := s.run(ctx, s.cfg.NodeBin, s.appleDir, []string{"apple.js", "album-tracks", id, "--sf", sf}, PlatformApple)
 		if err != nil {
+			if isNotFound(err, stderr) {
+				return nil, fmt.Errorf("%w: %s", ErrNotFound, strings.TrimSpace(stderr))
+			}
 			return nil, fmt.Errorf("music: apple album-tracks: %w: %s", err, strings.TrimSpace(stderr))
 		}
 		arr, err := parseJSONArray(tracksOut)
@@ -352,6 +377,9 @@ func (s *Service) resolveApple(ctx context.Context, url string) (*resolveData, e
 	if typ == "playlist" {
 		tracksOut, stderr, err := s.run(ctx, s.cfg.NodeBin, s.appleDir, []string{"apple.js", "playlist", id, "--sf", sf}, PlatformApple)
 		if err != nil {
+			if isNotFound(err, stderr) {
+				return nil, fmt.Errorf("%w: %s", ErrNotFound, strings.TrimSpace(stderr))
+			}
 			return nil, fmt.Errorf("music: apple playlist: %w: %s", err, strings.TrimSpace(stderr))
 		}
 		arr, err := parseJSONArray(tracksOut)
@@ -382,6 +410,9 @@ func (s *Service) resolveApple(ctx context.Context, url string) (*resolveData, e
 	if typ == "artist" {
 		out, stderr, err := s.run(ctx, s.cfg.NodeBin, s.appleDir, []string{"apple.js", "artist", id, "--sf", sf}, PlatformApple)
 		if err != nil {
+			if isNotFound(err, stderr) {
+				return nil, fmt.Errorf("%w: %s", ErrNotFound, strings.TrimSpace(stderr))
+			}
 			return nil, fmt.Errorf("music: apple artist: %w: %s", err, strings.TrimSpace(stderr))
 		}
 		raw, err := parseJSON(out)
@@ -463,6 +494,9 @@ func (s *Service) resolveSoundCloud(ctx context.Context, url string) (*resolveDa
 	}
 	out, stderr, err := s.run(ctx, s.cfg.NodeBin, s.soundcloudDir, []string{"soundcloud.js", url}, PlatformSoundCloud)
 	if err != nil {
+		if isNotFound(err, stderr) {
+			return nil, fmt.Errorf("%w: %s", ErrNotFound, strings.TrimSpace(stderr))
+		}
 		return nil, fmt.Errorf("music: soundcloud resolve: %w: %s", err, strings.TrimSpace(stderr))
 	}
 	raw, err := parseJSON(out)
@@ -511,6 +545,9 @@ func trackFromSoundCloud(m map[string]any) Track {
 func (s *Service) resolveTidal(ctx context.Context, url string) (*resolveData, error) {
 	out, stderr, err := s.run(ctx, s.cfg.NodeBin, s.tidalDir, []string{"tidal.js", url}, PlatformTidal)
 	if err != nil {
+		if isNotFound(err, stderr) {
+			return nil, fmt.Errorf("%w: %s", ErrNotFound, strings.TrimSpace(stderr))
+		}
 		return nil, fmt.Errorf("music: tidal resolve: %w: %s", err, strings.TrimSpace(stderr))
 	}
 	raw, err := parseJSON(out)

@@ -22,6 +22,8 @@ func mapError(err error) *apperrors.AppError {
 	switch {
 	case stderrors.Is(err, music.ErrUnsupportedPlatform):
 		return apperrors.UnsupportedPlatform(apperrors.CodeUnsupportedPlatform, "That music platform isn't supported yet.").WithCause(err)
+	case stderrors.Is(err, music.ErrNotFound):
+		return apperrors.MediaNotFound("We couldn't find that resource. It may be unavailable or the URL might be incorrect.").WithCause(err)
 	case stderrors.Is(err, music.ErrR2Required):
 		return apperrors.ProviderUnavailable("The music CDN isn't configured yet. Please try again later.").WithCause(err)
 	case stderrors.Is(err, music.ErrDownloadFailed):

@@ -26,24 +26,24 @@ type Platform string
 
 const (
 	PlatformAmazon     Platform = "amazon"
-	PlatformApple      Platform = "apple"
+	PlatformApple      Platform = "apple-music"
 	PlatformSoundCloud Platform = "soundcloud"
 	PlatformTidal      Platform = "tidal"
 )
 
 type Config struct {
-	Root            string
-	AmazonCookie    string
-	AppleCookie     string
+	Root             string
+	DeviceWVD        string
+	AmazonCookie     string
+	AppleCookie      string
 	SoundCloudCookie string
-	TidalToken      string
-	TempDir         string
-	Timeout         time.Duration
-	ResolveTimeout  time.Duration
-	NodeBin         string
-	PythonBin       string
-	DefaultQuality  string
-	TidalQuality    string
+	TidalToken       string
+	TempDir          string
+	Timeout          time.Duration
+	ResolveTimeout   time.Duration
+	NodeBin          string
+	PythonBin        string
+	TidalQuality     string
 }
 
 type Track struct {
@@ -60,7 +60,6 @@ type Track struct {
 	PreviewURL  string            `json:"preview_url,omitempty"`
 	URL         string            `json:"url,omitempty"`
 	Ext         string            `json:"ext,omitempty"`
-	Quality     string            `json:"quality,omitempty"`
 	Size        int64             `json:"size,omitempty"`
 	MediaID     int64             `json:"media_id,omitempty"`
 	Metadata    map[string]any    `json:"metadata,omitempty"`
@@ -69,7 +68,6 @@ type Track struct {
 type Format struct {
 	Type    string `json:"type"`
 	URL     string `json:"url"`
-	Quality string `json:"quality,omitempty"`
 	Ext     string `json:"ext,omitempty"`
 	Size    int64  `json:"size,omitempty"`
 	MediaID int64  `json:"media_id,omitempty"`
@@ -114,24 +112,23 @@ type resolveData struct {
 type AppleFallback func(ctx context.Context, url string) (*downloader.DownloadResult, error)
 
 type Service struct {
-	cfg          Config
-	r2           *r2.Manager
-	media        *media.Store
-	logger       *slog.Logger
-	appleFallback AppleFallback
-	amazonDir    string
-	appleDir     string
-	soundcloudDir string
-	tidalDir     string
-	amazonKuki   string
+	cfg            Config
+	r2             *r2.Manager
+	media          *media.Store
+	logger         *slog.Logger
+	appleFallback  AppleFallback
+	root           string
+	amazonDir      string
+	appleDir       string
+	soundcloudDir  string
+	tidalDir       string
+	deviceWVD      string
+	amazonKuki     string
 	appleUserToken string
 	tidalTokenFile string
 }
 
 func New(cfg Config, mgr *r2.Manager, store *media.Store, logger *slog.Logger) (*Service, error) {
-	if strings.TrimSpace(cfg.Root) == "" {
-		return nil, errors.New("music: Root is required")
-	}
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 15 * time.Minute
 	}
@@ -147,31 +144,48 @@ func New(cfg Config, mgr *r2.Manager, store *media.Store, logger *slog.Logger) (
 	if cfg.TempDir == "" {
 		cfg.TempDir = os.TempDir()
 	}
-	if cfg.DefaultQuality == "" {
-		cfg.DefaultQuality = "hires"
-	}
 	if cfg.TidalQuality == "" {
-		cfg.TidalQuality = "HIGH"
+		cfg.TidalQuality = "LOSSLESS"
 	}
 	cfg.AmazonCookie = absPath(cfg.AmazonCookie)
 	cfg.AppleCookie = absPath(cfg.AppleCookie)
 	cfg.SoundCloudCookie = absPath(cfg.SoundCloudCookie)
 	cfg.TidalToken = absPath(cfg.TidalToken)
+	cfg.DeviceWVD = absPath(cfg.DeviceWVD)
+	if cfg.DeviceWVD != "" && !fileExists(cfg.DeviceWVD) {
+		cfg.DeviceWVD = ""
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	root := strings.TrimRight(cfg.Root, "/\\")
+	root := strings.TrimRight(strings.TrimSpace(cfg.Root), "/\\")
+	if root == "" || !dirExists(root) {
+		if root != "" {
+			logger.Warn("music root not found, using embedded scrapers", "root", root)
+		}
+		dir, err := materializeScrapers(cfg.TempDir)
+		if err != nil {
+			return nil, err
+		}
+		root = dir
+	}
+
 	s := &Service{
-		cfg:           cfg,
-		r2:            mgr,
-		media:         store,
-		logger:        logger,
-		amazonDir:     filepath.Join(root, "amazon"),
-		appleDir:      filepath.Join(root, "apple"),
-		soundcloudDir: filepath.Join(root, "soundcloud"),
-		tidalDir:      filepath.Join(root, "tidal"),
+		cfg:            cfg,
+		r2:             mgr,
+		media:          store,
+		logger:         logger,
+		root:           root,
+		amazonDir:      filepath.Join(root, "amazon"),
+		appleDir:       filepath.Join(root, "apple"),
+		soundcloudDir:  filepath.Join(root, "soundcloud"),
+		tidalDir:       filepath.Join(root, "tidal"),
+		deviceWVD:      cfg.DeviceWVD,
 		tidalTokenFile: cfg.TidalToken,
+	}
+	if !fileExists(s.devicePath(PlatformAmazon)) || !fileExists(s.devicePath(PlatformApple)) {
+		logger.Warn("music: device.wvd missing, amazon/apple full-track downloads will fail", "hint", "set MUSIC_DEVICE_WVD")
 	}
 
 	if cfg.AppleCookie != "" {
@@ -193,6 +207,38 @@ func New(cfg Config, mgr *r2.Manager, store *media.Store, logger *slog.Logger) (
 	return s, nil
 }
 
+func dirExists(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.IsDir()
+}
+
+func (s *Service) devicePath(p Platform) string {
+	if s.deviceWVD != "" {
+		return s.deviceWVD
+	}
+	switch p {
+	case PlatformAmazon:
+		return filepath.Join(s.amazonDir, "device.wvd")
+	case PlatformApple:
+		return filepath.Join(s.appleDir, "device.wvd")
+	}
+	return ""
+}
+
+func (s *Service) Root() string {
+	if s == nil {
+		return ""
+	}
+	return s.root
+}
+
+func (s *Service) DeviceWVD() string {
+	if s == nil {
+		return ""
+	}
+	return s.deviceWVD
+}
+
 func absPath(p string) string {
 	p = strings.TrimSpace(p)
 	if p == "" {
@@ -209,7 +255,7 @@ func (s *Service) SetAppleFallback(fn AppleFallback) {
 }
 
 func (s *Service) Enabled() bool {
-	return s != nil && s.cfg.Root != ""
+	return s != nil && s.root != ""
 }
 
 func (s *Service) Timeout() time.Duration {
@@ -229,6 +275,9 @@ func (s *Service) envFor(p Platform) []string {
 		var env []string
 		if s.appleUserToken != "" {
 			env = append(env, "APPLE_MUSIC_USER_TOKEN="+s.appleUserToken)
+		}
+		if d := s.devicePath(PlatformApple); d != "" {
+			env = append(env, "APPLE_DEVICE_WVD="+d)
 		}
 		return env
 	case PlatformTidal:
@@ -280,7 +329,7 @@ func (s *Service) Resolve(ctx context.Context, url string) (*Result, error) {
 	return resultFromResolve(p, url, data), nil
 }
 
-func (s *Service) Download(ctx context.Context, url string, quality string) (*Result, error) {
+func (s *Service) Download(ctx context.Context, url string) (*Result, error) {
 	p := DetectPlatform(url)
 	if p == "" {
 		return nil, ErrUnsupportedPlatform
@@ -303,7 +352,7 @@ func (s *Service) Download(ctx context.Context, url string, quality string) (*Re
 	}
 
 	if p == PlatformApple {
-		if err := s.downloadApple(ctx, data, quality); err != nil {
+		if err := s.downloadApple(ctx, data); err != nil {
 			if s.appleFallback != nil {
 				if r, ferr := s.downloadAppleFallback(ctx, url); ferr == nil {
 					return r, nil
@@ -312,7 +361,7 @@ func (s *Service) Download(ctx context.Context, url string, quality string) (*Re
 			return nil, err
 		}
 	} else {
-		if err := s.downloadNative(ctx, p, data, quality); err != nil {
+		if err := s.downloadNative(ctx, p, data); err != nil {
 			return nil, err
 		}
 	}
@@ -344,7 +393,6 @@ func resultFromResolve(p Platform, url string, d *resolveData) *Result {
 			res.Formats = append(res.Formats, Format{
 				Type:    "audio",
 				URL:     t.URL,
-				Quality: formatQuality(t, i),
 				Ext:     t.Ext,
 				Size:    t.Size,
 				MediaID: t.MediaID,
@@ -364,20 +412,6 @@ func resultFromResolve(p Platform, url string, d *resolveData) *Result {
 		}
 	}
 	return res
-}
-
-func formatQuality(t *Track, i int) string {
-	parts := make([]string, 0, 3)
-	if t.TrackNumber > 0 {
-		parts = append(parts, fmt.Sprintf("%02d", t.TrackNumber))
-	} else {
-		parts = append(parts, fmt.Sprintf("%02d", i+1))
-	}
-	if t.Artist != "" {
-		parts = append(parts, t.Artist)
-	}
-	parts = append(parts, t.Title)
-	return strings.Join(parts, " - ")
 }
 
 func (s *Service) uploadFile(ctx context.Context, p Platform, trackID string, index int, localPath, ext string) (signedURL string, mediaID int64, size int64, err error) {
@@ -509,7 +543,6 @@ func (s *Service) downloadAppleFallback(ctx context.Context, url string) (*Resul
 			Title:   f.Quality,
 			URL:     signed,
 			Ext:     ext,
-			Quality: f.Quality,
 			Size:    size,
 			MediaID: mediaID,
 		}
@@ -517,7 +550,6 @@ func (s *Service) downloadAppleFallback(ctx context.Context, url string) (*Resul
 		out.Formats = append(out.Formats, Format{
 			Type:    "audio",
 			URL:     signed,
-			Quality: f.Quality,
 			Ext:     ext,
 			Size:    size,
 			MediaID: mediaID,
@@ -561,6 +593,7 @@ const mirrorUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/5
 var ErrUnsupportedPlatform = errors.New("music: unsupported platform")
 var ErrR2Required = errors.New("music: r2 mirroring is not configured")
 var ErrDownloadFailed = errors.New("music: download failed")
+var ErrNotFound = errors.New("music: resource not found")
 
 func extractCookieValue(path, name string) (string, error) {
 	data, err := os.ReadFile(path)
