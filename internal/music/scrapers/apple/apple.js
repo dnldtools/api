@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { writeFileSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -21,9 +21,20 @@ const DEFAULT_SF = process.env.APPLE_STOREFRONT || 'us';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const err = (m) => { throw new Error(m); };
 
+function resolvePython() {
+  if (process.env.PYTHON_BIN) return process.env.PYTHON_BIN;
+  for (const name of ['python3', 'python']) {
+    try {
+      const r = spawnSync(name, ['-V'], { stdio: 'ignore' });
+      if (r.status === 0) return name;
+    } catch {}
+  }
+  return 'python3';
+}
+
 function runWv(args) {
   return new Promise((resolve, reject) => {
-    const py = spawn('python', [join(HERE, 'apple_wvdecrypt.py'), ...args], { stdio: 'inherit' });
+    const py = spawn(resolvePython(), [join(HERE, 'apple_wvdecrypt.py'), ...args], { stdio: 'inherit' });
     py.on('error', reject);
     py.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`python exit ${code}`))));
   });

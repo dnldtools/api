@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const GQL = 'https://gql.music.amazon.dev';
 const TENZING = 'https://music.amazon.com/NA/api/textsearch/search/v1_1/';
@@ -15,16 +16,32 @@ const FIREFLY_AUTH_KEY = 'amzn1.application.e1dc16675f9f4c78b31927d5bfd5c229';
 const QUALITY_CAP = { std: 'STD_RES', hifi: 'HI_FI', hires: 'HI_RES' };
 const DEFAULT_TERRITORY = 'US';
 const DEFAULT_LOCALE = 'en_US';
-const KUKI_FILE = process.env.AMAZON_KUKI || fileURLToPath(new URL('./kuki.json', import.meta.url));
+const COOKIE_FILE = process.env.AMAZON_COOKIE || fileURLToPath(new URL('../../../../cookie/amazon.json', import.meta.url));
 
-const PREMIUM_COOKIE = (() => {
-  try {
-    return Object.entries(JSON.parse(readFileSync(KUKI_FILE, 'utf8')))
-      .filter(([, v]) => v && /amazon\.com$/.test(v.domain))
-      .map(([k, v]) => `${k}=${v.value}`)
-      .join('; ');
-  } catch { return ''; }
-})();
+function parseCookies(raw) {
+  const data = JSON.parse(raw);
+  const list = Array.isArray(data) ? data : Object.entries(data).map(([name, v]) => ({ name, value: v.value, domain: v.domain }));
+  return list.filter((c) => c && c.name && c.value && /amazon\.com$/.test(c.domain || '.amazon.com'));
+}
+
+function loadCookieJar() {
+  const p = process.env.AMAZON_KUKI && fileExistsSafe(process.env.AMAZON_KUKI) ? process.env.AMAZON_KUKI : COOKIE_FILE;
+  return parseCookies(readFileSync(p, 'utf8'));
+}
+
+function fileExistsSafe(p) { try { return readFileSync(p, 'utf8').length > 0; } catch { return false; } }
+
+const COOKIE_JAR = (() => { try { return loadCookieJar(); } catch { return []; } })();
+const PREMIUM_COOKIE = COOKIE_JAR.map((c) => `${c.name}=${c.value}`).join('; ');
+let _kukiTmp = '';
+function kukiObjectFile() {
+  if (_kukiTmp) return _kukiTmp;
+  const obj = {};
+  for (const c of COOKIE_JAR) obj[c.name] = { value: c.value, domain: c.domain };
+  _kukiTmp = join(tmpdir(), `amazon-kuki-${process.pid}.json`);
+  writeFileSync(_kukiTmp, JSON.stringify(obj));
+  return _kukiTmp;
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const err = (m) => { throw new Error(m); };
@@ -32,10 +49,21 @@ const flag = (argv, name, def) => { const i = argv.indexOf(name); return i === -
 const sanitize = (s) => String(s).replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').slice(0, 120);
 const asinFromUrl = (u) => { try { const x = new URL(u); const seg = x.pathname.match(/\/(albums|artists|playlists|dp|tracks)\/(B0[A-Z0-9]{8})/i); if (seg) return { asin: seg[2], kind: seg[1].toLowerCase() }; if (x.searchParams.get('trackAsin')) return { asin: x.searchParams.get('trackAsin'), kind: 'track' }; return { asin: String(u).match(/B0[A-Z0-9]{8}/i)?.[0], kind: 'album' }; } catch { return { asin: String(u).match(/B0[A-Z0-9]{8}/i)?.[0], kind: 'album' }; } };
 
+function resolvePython() {
+  if (process.env.PYTHON_BIN) return process.env.PYTHON_BIN;
+  for (const name of ['python3', 'python']) {
+    try {
+      const r = spawnSync(name, ['-V'], { stdio: 'ignore' });
+      if (r.status === 0) return name;
+    } catch {}
+  }
+  return 'python3';
+}
+
 function runCapture(cmd, args) {
   return new Promise((resolve) => {
     let out = '', errOut = '';
-    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, AMAZON_KUKI: kukiObjectFile() } });
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { errOut += d; });
     child.on('error', (e) => resolve({ ok: false, error: e.message, out, errOut }));
@@ -96,7 +124,7 @@ async function downloadTracks(tracks, argv, albumMeta = {}) {
       let file = join(outdir, `${sanitize(t.title)}.${ext}`);
       if (made.has(file)) file = join(outdir, `${sanitize(t.title)}.${q}.${ext}`);
       made.add(file);
-      const r = await runCapture('python', [py, t.id, '--device', device, '--quality', q, '--out', file, ...meta]);
+      const r = await runCapture(resolvePython(), [py, t.id, '--device', device, '--quality', q, '--out', file, ...meta]);
       if (!r.ok) continue;
       files.push({
         path: file,

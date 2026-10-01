@@ -30,3 +30,9 @@ coverage.*
 /docs
 # Scraper temp artifacts
 /.tmp/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+# Scraper scratch probes
+internal/music/scrapers/**/probe.mjs

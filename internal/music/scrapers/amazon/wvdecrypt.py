@@ -17,7 +17,7 @@ try:
 except ImportError:
     sys.exit("missing pywidevine: pip install pywidevine")
 
-KUKI_FILE = os.environ.get("AMAZON_KUKI") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "kuki.json")
+KUKI_FILE = os.environ.get("AMAZON_KUKI") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..", "cookie", "amazon.json")
 GQL = "https://gql.music.amazon.dev"
 CONFIG = "https://music.amazon.com/config.json"
 ORIGIN = "https://music.amazon.com"
@@ -30,6 +30,12 @@ MUSIC_AGENT = "Chrome/124.0.0.0 AmazonMusic/1.0"
 def load_cookie():
     with open(KUKI_FILE, "r", encoding="utf-8") as f:
         kuki = json.load(f)
+    if isinstance(kuki, list):
+        return "; ".join(
+            f"{c['name']}={c['value']}"
+            for c in kuki
+            if c and c.get("value") and c.get("domain", "").endswith("amazon.com")
+        )
     return "; ".join(
         f"{name}={meta['value']}"
         for name, meta in kuki.items()
@@ -118,6 +124,8 @@ def post_license(cfg, cookie, license_url, license_headers, challenge_b64):
             "csrf-rnd": str(cfg["csrf"]["rnd"]),
         }
     )
+    if cfg.get("accessToken"):
+        headers["Authorization"] = f"Bearer {cfg['accessToken']}"
     r = requests.post(
         license_url,
         headers=headers,
@@ -197,7 +205,8 @@ def tag_file(in_path, args):
         except Exception:
             cover = None
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", in_path]
-    if cover and os.path.exists(cover):
+    embed_cover = cover and os.path.exists(cover) and ext in (".flac", ".m4a", ".mp4")
+    if embed_cover:
         cmd += ["-i", cover, "-map", "0:a", "-map", "1:v", "-c:v", "copy", "-disposition:v:0", "attached_pic"]
     else:
         cmd += ["-map", "0:a"]

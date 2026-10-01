@@ -167,7 +167,7 @@ func New(cfg Config, mgr *r2.Manager, store *media.Store, logger *slog.Logger) (
 		cfg.NodeBin = "node"
 	}
 	if cfg.PythonBin == "" {
-		cfg.PythonBin = "python"
+		cfg.PythonBin = resolvePythonBin()
 	}
 	if cfg.TempDir == "" {
 		cfg.TempDir = os.TempDir()
@@ -742,6 +742,15 @@ func discoverFile(dir, prefix string) (string, error) {
 func fileExists(path string) bool {
 	st, err := os.Stat(path)
 	return err == nil && !st.IsDir()
+}
+
+func resolvePythonBin() string {
+	for _, name := range []string{"python3", "python"} {
+		if p, err := exec.LookPath(name); err == nil {
+			return p
+		}
+	}
+	return "python3"
 }
 
 func sniffExt(path string) string {
