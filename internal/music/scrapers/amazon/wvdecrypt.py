@@ -153,6 +153,14 @@ def extract_license_bytes(resp):
     return resp.content
 
 
+def ffmpeg_capture(cmd):
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        detail = (proc.stderr or "").strip().replace("\n", " ")[:300]
+        sys.exit(f"ffmpeg exit {proc.returncode}: {detail} ({cmd[-1]})")
+    return proc
+
+
 def decrypt_file(keys, mp4_path, out_path):
     kid_key = ":".join(f"{k.kid.hex}={k.key.hex()}" for k in keys)
     cmd = [
@@ -162,7 +170,7 @@ def decrypt_file(keys, mp4_path, out_path):
         "-c", "copy",
         out_path,
     ]
-    subprocess.run(cmd, check=True)
+    ffmpeg_capture(cmd)
 
 
 def stream_decrypt(keys, mp4_url, codecs):
@@ -231,7 +239,7 @@ def tag_file(in_path, args):
 
     tmp = in_path + ".tagging" + ext
     cmd += [tmp]
-    subprocess.run(cmd, check=True)
+    ffmpeg_capture(cmd)
     if cover and os.path.exists(cover):
         os.unlink(cover)
     os.replace(tmp, in_path)
@@ -308,11 +316,18 @@ def main():
     print(f"[+] downloading encrypted mp4: {manifest['base_url'][:80]}...")
     tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
     tmp.close()
-    with requests.get(manifest["base_url"], stream=True, timeout=120) as r:
+    with requests.get(manifest["base_url"], stream=True, timeout=120, headers={"user-agent": UA}) as r:
+        status = r.status_code
         r.raise_for_status()
         with open(tmp.name, "wb") as f:
             for chunk in r.iter_content(1024 * 1024):
                 f.write(chunk)
+    size = os.path.getsize(tmp.name)
+    with open(tmp.name, "rb") as f:
+        head = f.read(32)
+    if size < 65536 or b"ftyp" not in head:
+        os.unlink(tmp.name)
+        sys.exit(f"cdn download unusable: status={status} size={size} head={head[:16]!r}")
     try:
         print("[+] decrypting with ffmpeg...")
         decrypt_file(keys, tmp.name, out_path)
