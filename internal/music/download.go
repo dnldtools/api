@@ -8,6 +8,17 @@ import (
 	"strings"
 )
 
+type localFormat struct {
+	path       string
+	ext        string
+	quality    string
+	codec      string
+	label      string
+	bitrate    int64
+	bitDepth   int
+	sampleRate int
+}
+
 func (s *Service) downloadNative(ctx context.Context, p Platform, d *resolveData) error {
 	if len(d.Tracks) == 0 {
 		return ErrDownloadFailed
@@ -22,20 +33,44 @@ func (s *Service) downloadNative(ctx context.Context, p Platform, d *resolveData
 	for i := range d.Tracks {
 		t := &d.Tracks[i]
 		prefix := trackPrefix(t, i)
-		path, ext, err := s.downloadOne(ctx, p, *t, tmpDir, prefix)
+		files, err := s.downloadOne(ctx, p, *t, tmpDir, prefix)
 		if err != nil {
 			s.logger.Warn("music track failed", "platform", p, "id", t.ID, "error", err)
 			continue
 		}
-		signed, mediaID, size, err := s.uploadFile(ctx, p, t.ID, i, path, ext)
-		if err != nil {
-			s.logger.Warn("music upload failed", "platform", p, "id", t.ID, "error", err)
+		t.Formats = nil
+		uploaded := 0
+		for j, f := range files {
+			signed, mediaID, size, err := s.uploadFile(ctx, p, t.ID, j, f.path, f.ext)
+			if err != nil {
+				s.logger.Warn("music upload failed", "platform", p, "id", t.ID, "ext", f.ext, "error", err)
+				continue
+			}
+			t.Formats = append(t.Formats, TrackFormat{
+				Type:       "audio",
+				URL:        signed,
+				Ext:        f.ext,
+				Quality:    f.quality,
+				Codec:      f.codec,
+				Label:      f.label,
+				Bitrate:    f.bitrate,
+				BitDepth:   f.bitDepth,
+				SampleRate: f.sampleRate,
+				Size:       size,
+				MediaID:    mediaID,
+			})
+			if t.URL == "" {
+				t.URL = signed
+				t.Ext = f.ext
+				t.Size = size
+				t.MediaID = mediaID
+			}
+			uploaded++
+		}
+		if uploaded == 0 {
+			s.logger.Warn("music track produced no uploads", "platform", p, "id", t.ID)
 			continue
 		}
-		t.URL = signed
-		t.Ext = ext
-		t.Size = size
-		t.MediaID = mediaID
 		ok++
 	}
 	if ok == 0 {
@@ -75,7 +110,7 @@ func (s *Service) downloadApple(ctx context.Context, d *resolveData) error {
 			s.logger.Warn("music apple no output", "id", t.ID, "stderr", strings.TrimSpace(stderr))
 			continue
 		}
-		signed, mediaID, size, err := s.uploadFile(ctx, PlatformApple, t.ID, i, outPath, "m4a")
+		signed, mediaID, size, err := s.uploadFile(ctx, PlatformApple, t.ID, 0, outPath, "m4a")
 		if err != nil {
 			s.logger.Warn("music apple upload failed", "id", t.ID, "error", err)
 			continue
@@ -84,6 +119,16 @@ func (s *Service) downloadApple(ctx context.Context, d *resolveData) error {
 		t.Ext = "m4a"
 		t.Size = size
 		t.MediaID = mediaID
+		t.Formats = []TrackFormat{{
+			Type:    "audio",
+			URL:     signed,
+			Ext:     "m4a",
+			Quality: "AAC",
+			Codec:   "mp4a.40.2",
+			Label:   "AAC · 256 kbps",
+			Size:    size,
+			MediaID: mediaID,
+		}}
 		ok++
 	}
 	if ok == 0 {
@@ -92,7 +137,7 @@ func (s *Service) downloadApple(ctx context.Context, d *resolveData) error {
 	return nil
 }
 
-func (s *Service) downloadOne(ctx context.Context, p Platform, t Track, tmpDir, prefix string) (path, ext string, err error) {
+func (s *Service) downloadOne(ctx context.Context, p Platform, t Track, tmpDir, prefix string) ([]localFormat, error) {
 	switch p {
 	case PlatformAmazon:
 		return s.downloadOneAmazon(ctx, t, tmpDir)
@@ -101,66 +146,101 @@ func (s *Service) downloadOne(ctx context.Context, p Platform, t Track, tmpDir, 
 	case PlatformTidal:
 		return s.downloadOneTidal(ctx, t, tmpDir, prefix)
 	}
-	return "", "", ErrUnsupportedPlatform
+	return nil, ErrUnsupportedPlatform
 }
 
-func (s *Service) downloadOneAmazon(ctx context.Context, t Track, tmpDir string) (path, ext string, err error) {
+func (s *Service) downloadOneAmazon(ctx context.Context, t Track, tmpDir string) ([]localFormat, error) {
 	out, stderr, err := s.run(ctx, s.cfg.NodeBin, s.amazonDir, []string{"amazon.js", "download", t.ID, "--outdir", tmpDir, "--device", s.devicePath(PlatformAmazon)}, PlatformAmazon)
 	if err != nil {
-		return "", "", fmt.Errorf("amazon download %s: %w: %s", t.ID, err, strings.TrimSpace(stderr))
+		return nil, fmt.Errorf("amazon download %s: %w: %s", t.ID, err, strings.TrimSpace(stderr))
 	}
 	raw, perr := parseJSON(out)
 	if perr != nil {
-		return "", "", perr
+		return nil, perr
 	}
 	if _, present := raw["ok"]; present && !boolv(raw, "ok") {
-		return "", "", fmt.Errorf("amazon %s: %s", t.ID, str(raw, "error"))
+		return nil, fmt.Errorf("amazon %s: %s", t.ID, str(raw, "error"))
 	}
-	p := str(raw, "out")
-	if p == "" {
-		return "", "", fmt.Errorf("amazon %s: no output path", t.ID)
+	files := parseFileList(raw)
+	if len(files) == 0 {
+		return nil, fmt.Errorf("amazon %s: no output files", t.ID)
 	}
-	if _, statErr := os.Stat(p); statErr != nil {
-		return "", "", fmt.Errorf("amazon %s: output missing: %v", t.ID, statErr)
-	}
-	ext = strings.TrimPrefix(filepath.Ext(p), ".")
-	if ext == "" {
-		ext = "flac"
-	}
-	return p, ext, nil
+	return files, nil
 }
 
-func (s *Service) downloadOneSoundCloud(ctx context.Context, t Track, tmpDir, prefix string) (path, ext string, err error) {
-	_, stderr, err := s.run(ctx, s.cfg.NodeBin, s.soundcloudDir, []string{"soundcloud.js", "download", t.ID, "--out", filepath.Join(tmpDir, prefix)}, PlatformSoundCloud)
+func (s *Service) downloadOneSoundCloud(ctx context.Context, t Track, tmpDir, prefix string) ([]localFormat, error) {
+	out, stderr, err := s.run(ctx, s.cfg.NodeBin, s.soundcloudDir, []string{"soundcloud.js", "download", t.ID, "--out", filepath.Join(tmpDir, prefix)}, PlatformSoundCloud)
 	if err != nil {
-		return "", "", fmt.Errorf("soundcloud download %s: %w: %s", t.ID, err, strings.TrimSpace(stderr))
+		return nil, fmt.Errorf("soundcloud download %s: %w: %s", t.ID, err, strings.TrimSpace(stderr))
 	}
-	p, derr := discoverFile(tmpDir, prefix)
-	if derr != nil {
-		return "", "", fmt.Errorf("soundcloud %s: %w", t.ID, derr)
+	raw, perr := parseJSON(out)
+	if perr != nil {
+		return nil, perr
 	}
-	ext = sniffExt(p)
-	if ext == "" {
-		ext = "mp3"
+	if _, present := raw["ok"]; present && !boolv(raw, "ok") {
+		return nil, fmt.Errorf("soundcloud %s: %s", t.ID, str(raw, "error"))
 	}
-	return p, ext, nil
+	files := parseFileList(raw)
+	if len(files) == 0 {
+		return nil, fmt.Errorf("soundcloud %s: no output files", t.ID)
+	}
+	return files, nil
 }
 
-func (s *Service) downloadOneTidal(ctx context.Context, t Track, tmpDir, prefix string) (path, ext string, err error) {
+func (s *Service) downloadOneTidal(ctx context.Context, t Track, tmpDir, prefix string) ([]localFormat, error) {
 	q := s.cfg.TidalQuality
+	if q == "" {
+		q = "BEST"
+	}
 	out, stderr, err := s.run(ctx, s.cfg.NodeBin, s.tidalDir, []string{"tidal.js", "download", t.ID, "--out", filepath.Join(tmpDir, prefix), "--quality", q}, PlatformTidal)
 	if err != nil {
-		return "", "", fmt.Errorf("tidal download %s: %w: %s", t.ID, err, strings.TrimSpace(stderr))
+		return nil, fmt.Errorf("tidal download %s: %w: %s", t.ID, err, strings.TrimSpace(stderr))
 	}
-	p := parseSavedPath(string(out))
-	if p == "" {
-		p, derr := discoverFile(tmpDir, prefix)
-		if derr != nil {
-			return "", "", fmt.Errorf("tidal %s: %w", t.ID, derr)
+	raw, perr := parseJSON(out)
+	if perr != nil {
+		return nil, perr
+	}
+	if _, present := raw["ok"]; present && !boolv(raw, "ok") {
+		return nil, fmt.Errorf("tidal %s: %s", t.ID, str(raw, "error"))
+	}
+	files := parseFileList(raw)
+	if len(files) == 0 {
+		return nil, fmt.Errorf("tidal %s: no output files", t.ID)
+	}
+	return files, nil
+}
+
+func parseFileList(raw map[string]any) []localFormat {
+	list, _ := raw["files"].([]any)
+	var out []localFormat
+	for _, v := range list {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
 		}
-		return p, extFromPath(p), nil
+		p := str(m, "path")
+		if p == "" {
+			continue
+		}
+		if _, statErr := os.Stat(p); statErr != nil {
+			continue
+		}
+		ext := str(m, "ext")
+		if ext == "" {
+			ext = extFromPath(p)
+		}
+		out = append(out, localFormat{
+			path:       p,
+			ext:        ext,
+			quality:    str(m, "quality"),
+			codec:      str(m, "codec"),
+			label:      str(m, "label"),
+			bitrate:    int64v(m, "bitrate"),
+			bitDepth:   intv(m, "bitDepth"),
+			sampleRate: intv(m, "sampleRate"),
+		})
 	}
-	return p, extFromPath(p), nil
+	return out
 }
 
 func extFromPath(p string) string {
@@ -169,16 +249,6 @@ func extFromPath(p string) string {
 		return "m4a"
 	}
 	return e
-}
-
-func parseSavedPath(stdout string) string {
-	for _, line := range strings.Split(stdout, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "saved:") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "saved:"))
-		}
-	}
-	return ""
 }
 
 func trackPrefix(t *Track, idx int) string {

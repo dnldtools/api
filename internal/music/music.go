@@ -56,6 +56,11 @@ type Track struct {
 	DurationMs  int64             `json:"duration_ms,omitempty"`
 	ISRC        string            `json:"isrc,omitempty"`
 	Explicit    bool              `json:"explicit,omitempty"`
+	Genre       string            `json:"genre,omitempty"`
+	Copyright   string            `json:"copyright,omitempty"`
+	ReleaseDate string            `json:"release_date,omitempty"`
+	Year        string            `json:"year,omitempty"`
+	Version     string            `json:"version,omitempty"`
 	Artwork     map[string]string `json:"artwork,omitempty"`
 	PreviewURL  string            `json:"preview_url,omitempty"`
 	URL         string            `json:"url,omitempty"`
@@ -63,14 +68,38 @@ type Track struct {
 	Size        int64             `json:"size,omitempty"`
 	MediaID     int64             `json:"media_id,omitempty"`
 	Metadata    map[string]any    `json:"metadata,omitempty"`
+	Formats     []TrackFormat     `json:"formats,omitempty"`
+}
+
+type TrackFormat struct {
+	Type       string `json:"type"`
+	URL        string `json:"url"`
+	Ext        string `json:"ext,omitempty"`
+	Quality    string `json:"quality,omitempty"`
+	Codec      string `json:"codec,omitempty"`
+	Label      string `json:"label,omitempty"`
+	Bitrate    int64  `json:"bitrate,omitempty"`
+	BitDepth   int    `json:"bit_depth,omitempty"`
+	SampleRate int    `json:"sample_rate,omitempty"`
+	Size       int64  `json:"size,omitempty"`
+	MediaID    int64  `json:"media_id,omitempty"`
 }
 
 type Format struct {
-	Type    string `json:"type"`
-	URL     string `json:"url"`
-	Ext     string `json:"ext,omitempty"`
-	Size    int64  `json:"size,omitempty"`
-	MediaID int64  `json:"media_id,omitempty"`
+	Type       string `json:"type"`
+	URL        string `json:"url"`
+	Ext        string `json:"ext,omitempty"`
+	Quality    string `json:"quality,omitempty"`
+	Codec      string `json:"codec,omitempty"`
+	Label      string `json:"label,omitempty"`
+	Bitrate    int64  `json:"bitrate,omitempty"`
+	BitDepth   int    `json:"bit_depth,omitempty"`
+	SampleRate int    `json:"sample_rate,omitempty"`
+	Size       int64  `json:"size,omitempty"`
+	MediaID    int64  `json:"media_id,omitempty"`
+	TrackID    string `json:"track_id,omitempty"`
+	Title      string `json:"title,omitempty"`
+	Artist     string `json:"artist,omitempty"`
 }
 
 type Result struct {
@@ -145,7 +174,7 @@ func New(cfg Config, mgr *r2.Manager, store *media.Store, logger *slog.Logger) (
 		cfg.TempDir = os.TempDir()
 	}
 	if cfg.TidalQuality == "" {
-		cfg.TidalQuality = "LOSSLESS"
+		cfg.TidalQuality = "BEST"
 	}
 	cfg.AmazonCookie = absPath(cfg.AmazonCookie)
 	cfg.AppleCookie = absPath(cfg.AppleCookie)
@@ -389,13 +418,36 @@ func resultFromResolve(p Platform, url string, d *resolveData) *Result {
 	}
 	for i := range res.Tracks {
 		t := &res.Tracks[i]
+		for j := range t.Formats {
+			f := &t.Formats[j]
+			res.Formats = append(res.Formats, Format{
+				Type:       f.Type,
+				URL:        f.URL,
+				Ext:        f.Ext,
+				Quality:    f.Quality,
+				Codec:      f.Codec,
+				Label:      formatFallbackLabel(f.Ext, f.Quality, f.Label),
+				Bitrate:    f.Bitrate,
+				BitDepth:   f.BitDepth,
+				SampleRate: f.SampleRate,
+				Size:       f.Size,
+				MediaID:    f.MediaID,
+				TrackID:    t.ID,
+				Title:      t.Title,
+				Artist:     t.Artist,
+			})
+		}
 		if t.URL != "" {
 			res.Formats = append(res.Formats, Format{
 				Type:    "audio",
 				URL:     t.URL,
 				Ext:     t.Ext,
+				Label:   formatFallbackLabel(t.Ext, "", ""),
 				Size:    t.Size,
 				MediaID: t.MediaID,
+				TrackID: t.ID,
+				Title:   t.Title,
+				Artist:  t.Artist,
 			})
 		}
 	}
@@ -412,6 +464,20 @@ func resultFromResolve(p Platform, url string, d *resolveData) *Result {
 		}
 	}
 	return res
+}
+
+func formatFallbackLabel(ext, quality, label string) string {
+	if label != "" {
+		return label
+	}
+	kind := strings.ToUpper(strings.TrimPrefix(ext, "."))
+	if kind == "" {
+		kind = "AUDIO"
+	}
+	if quality != "" {
+		return kind + " · " + quality
+	}
+	return kind
 }
 
 func (s *Service) uploadFile(ctx context.Context, p Platform, trackID string, index int, localPath, ext string) (signedURL string, mediaID int64, size int64, err error) {

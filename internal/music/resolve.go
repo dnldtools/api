@@ -271,6 +271,7 @@ func trackFromAmazon(m map[string]any) Track {
 		TrackNumber: intv(m, "trackNumber"),
 		DiscNumber:  intv(m, "discNumber"),
 		DurationMs:  durationMsOf(m),
+		ISRC:        str(m, "isrc"),
 		Artwork:     artworkMap(m),
 		PreviewURL:  str(m, "previewUrl"),
 		Metadata:    m,
@@ -532,13 +533,22 @@ func (s *Service) resolveSoundCloud(ctx context.Context, url string) (*resolveDa
 }
 
 func trackFromSoundCloud(m map[string]any) Track {
+	released := str(m, "releaseDate")
+	var isrc string
+	if pub, ok := m["publisherMetadata"].(map[string]any); ok {
+		isrc = str(pub, "isrc")
+	}
 	return Track{
-		ID:         fmt.Sprint(int64v(m, "id")),
-		Title:      str(m, "title"),
-		Artist:     str(m, "artist"),
-		DurationMs: durationMsOf(m),
-		Artwork:    artworkMap(m),
-		Metadata:   m,
+		ID:          fmt.Sprint(int64v(m, "id")),
+		Title:       str(m, "title"),
+		Artist:      str(m, "artist"),
+		DurationMs:  durationMsOf(m),
+		ISRC:        isrc,
+		Genre:       str(m, "genre"),
+		ReleaseDate: released,
+		Year:        firstN(released, 4),
+		Artwork:     artworkMap(m),
+		Metadata:    m,
 	}
 }
 
@@ -601,6 +611,9 @@ func trackFromTidal(m map[string]any) Track {
 		DurationMs:  durationMsOf(m),
 		ISRC:        str(m, "isrc"),
 		Explicit:    boolv(m, "explicit"),
+		Copyright:   str(m, "copyright"),
+		Version:     str(m, "version"),
+		URL:         str(m, "url"),
 		Artwork:     a,
 		Metadata:    m,
 	}

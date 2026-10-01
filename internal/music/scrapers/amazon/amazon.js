@@ -56,7 +56,26 @@ function metaArgs(t, albumMeta = {}) {
   push('--year', albumMeta.year);
   push('--copyright', albumMeta.copyright);
   push('--artwork', cover);
+  push('--isrc', t.isrc);
   return args;
+}
+
+function extForCodec(codecs) {
+  const c = String(codecs || '').toLowerCase();
+  if (c.includes('flac')) return 'flac';
+  if (c.includes('mp4a') || c.includes('aac')) return 'm4a';
+  if (c.includes('opus')) return 'opus';
+  if (c.includes('mp3') || c.includes('mpeg')) return 'mp3';
+  return 'm4a';
+}
+
+function qualityLabel(q, manifest) {
+  const ext = extForCodec(manifest?.codecs);
+  const kind = ext === 'flac' ? 'FLAC' : ext === 'opus' ? 'OPUS' : ext === 'mp3' ? 'MP3' : 'AAC';
+  const tier = { hires: 'HI_RES', hifi: 'HI_FI', std: 'STD' }[q] || String(q).toUpperCase();
+  const spec = [manifest?.bitDepth ? `${manifest.bitDepth}-bit` : null, manifest?.samplingRate ? `${manifest.samplingRate / 1000}kHz` : null].filter(Boolean).join('/');
+  const head = [kind, tier].filter(Boolean).join(' · ');
+  return spec ? `${head} (${spec})` : head;
 }
 
 async function downloadTracks(tracks, argv, albumMeta = {}) {
@@ -65,16 +84,33 @@ async function downloadTracks(tracks, argv, albumMeta = {}) {
   const py = fileURLToPath(new URL('./wvdecrypt.py', import.meta.url));
   const results = [];
   for (const t of tracks) {
-    let lastErr = 'all qualities failed';
-    let done = false;
     const meta = metaArgs(t, albumMeta);
-    for (const [q, ext] of [['hires', 'flac'], ['hifi', 'flac'], ['std', 'opus']]) {
-      const out = join(outdir, `${sanitize(t.title)}.${ext}`);
-      const r = await runCapture('python', [py, t.id, '--device', device, '--quality', q, '--out', out, ...meta]);
-      if (r.ok) { results.push({ id: t.id, title: t.title, ok: true, quality: q, out }); done = true; break; }
-      lastErr = (r.errOut || r.error || `exit ${r.code}`).trim().split('\n').slice(-2).join(' | ');
+    const made = new Set();
+    const files = [];
+    for (const [q, defaultExt] of [['hires', 'flac'], ['hifi', 'flac'], ['std', 'opus']]) {
+      let manifest;
+      try { manifest = (await getStream(t.id, { quality: q }))?.manifest; }
+      catch { continue; }
+      if (!manifest?.pssh || !manifest?.licenseUrl || !manifest?.baseUrl) continue;
+      const ext = extForCodec(manifest.codecs) || defaultExt;
+      let file = join(outdir, `${sanitize(t.title)}.${ext}`);
+      if (made.has(file)) file = join(outdir, `${sanitize(t.title)}.${q}.${ext}`);
+      made.add(file);
+      const r = await runCapture('python', [py, t.id, '--device', device, '--quality', q, '--out', file, ...meta]);
+      if (!r.ok) continue;
+      files.push({
+        path: file,
+        ext,
+        quality: q,
+        codec: manifest.codecs || null,
+        bitDepth: manifest.bitDepth || null,
+        sampleRate: manifest.samplingRate || null,
+        bitrate: manifest.bandwidth || null,
+        label: qualityLabel(q, manifest),
+      });
     }
-    if (!done) results.push({ id: t.id, title: t.title, ok: false, error: lastErr });
+    if (files.length) results.push({ id: t.id, title: t.title, ok: true, files });
+    else results.push({ id: t.id, title: t.title, ok: false, error: 'all qualities failed' });
   }
   return results;
 }
@@ -206,7 +242,7 @@ async function search(query, { limit = 10 } = {}) {
 }
 
 async function getTrack(id) {
-  const t = await gql(`query($id: String!) { track(id: $id) { id title duration images { url width height } album { id title } contributingArtists { edges { node { id name } } } } }`, { id });
+  const t = await gql(`query($id: String!) { track(id: $id) { id title duration isrc images { url width height } album { id title } contributingArtists { edges { node { id name } } } } }`, { id });
   const track = t.track;
   if (!track) throw new Error(`track ${id} not found`);
   return {
@@ -238,6 +274,7 @@ async function getAlbum(id) {
     tracks: (album.tracks || []).map((t) => ({
       id: t.id,
       title: t.title,
+      isrc: t.isrc,
       trackNumber: t.trackNumber,
       durationSeconds: t.duration,
       artists: (t.contributingArtists?.edges || []).map((e) => ({ id: e.node.id, name: e.node.name })),
@@ -273,6 +310,7 @@ async function getPlaylist(id, { trackLimit = 1000 } = {}) {
     tracks: (playlist.tracks?.edges || []).map((e) => ({
       id: e.node.id,
       title: e.node.title,
+      isrc: e.node.isrc,
       durationSeconds: e.node.duration,
       artists: (e.node.contributingArtists?.edges || []).map((x) => ({ id: x.node.id, name: x.node.name })),
       previewUrl: `${SAMPLE}/${e.node.id}`,
@@ -381,26 +419,25 @@ async function getStream(id, { quality = 'hires', saveManifest = '' } = {}) {
 }
 
 async function probeQualities(id, title) {
+  const results = await Promise.all(['hires', 'hifi', 'std'].map((q) => getStream(id, { quality: q }).then((s) => ({ q, s })).catch(() => null)));
   const qualities = [];
-  for (const q of ['hires', 'hifi', 'std']) {
-    try {
-      const s = await getStream(id, { quality: q });
-      if (s?.audioUrl && s.manifest?.pssh && s.manifest?.licenseUrl && s.manifest?.baseUrl) {
-        qualities.push({
-          quality: q,
-          file: `${sanitize(title)}.${q === 'std' ? 'opus' : 'flac'}`,
-          codec: s.manifest.codecs,
-          bitDepth: s.manifest.bitDepth,
-          samplingRate: s.manifest.samplingRate,
-          bitrate: s.manifest.bandwidth,
-          streamName: s.manifest.streamName,
-          manifestUrl: s.audioUrl,
-          mediaUrl: s.manifest.baseUrl,
-          licenseUrl: s.manifest.licenseUrl,
-          downloadUrl: `/amazon/download/${id}?quality=${q}&title=${encodeURIComponent(sanitize(title))}`,
-        });
-      }
-    } catch {}
+  for (const r of results.filter(Boolean)) {
+    const { q, s } = r;
+    if (s?.audioUrl && s.manifest?.pssh && s.manifest?.licenseUrl && s.manifest?.baseUrl) {
+      qualities.push({
+        quality: q,
+        file: `${sanitize(title)}.${extForCodec(s.manifest.codecs)}`,
+        codec: s.manifest.codecs,
+        bitDepth: s.manifest.bitDepth,
+        sampleRate: s.manifest.samplingRate,
+        bitrate: s.manifest.bandwidth,
+        streamName: s.manifest.streamName,
+        manifestUrl: s.audioUrl,
+        mediaUrl: s.manifest.baseUrl,
+        licenseUrl: s.manifest.licenseUrl,
+        downloadUrl: `/amazon/download/${id}?quality=${q}&title=${encodeURIComponent(sanitize(title))}`,
+      });
+    }
   }
   return qualities;
 }
@@ -483,28 +520,28 @@ async function cmdDownload(target, argv) {
   }
   if (kind === 'dp' || kind === 'tracks' || kind === 'track') {
     const t = await getTrack(asin);
-    const results = await downloadTracks([{ id: t.id, title: t.title, artists: t.artists, album: t.album, artwork: t.artwork }], argv, { title: t.album?.title, artwork: t.artwork });
-    console.log(JSON.stringify({ type: 'track', id: t.id, title: t.title, ...results[0] }, null, 2));
+    const results = await downloadTracks([{ id: t.id, title: t.title, isrc: t.isrc, artists: t.artists, album: t.album, artwork: t.artwork }], argv, { title: t.album?.title, artwork: t.artwork });
+    console.log(JSON.stringify({ type: 'track', ...results[0] }, null, 2));
     return;
   }
   if (kind === 'albums') {
     const album = await getAlbum(asin);
     const albumMeta = { title: album.title, artists: album.artists, year: (album.releaseDate || '').slice(0, 4) || null, artwork: album.artwork, copyright: album.copyright };
-    const results = await downloadTracks((album.tracks || []).map((t) => ({ id: t.id, title: t.title, trackNumber: t.trackNumber, artists: t.artists })), argv, albumMeta);
+    const results = await downloadTracks((album.tracks || []).map((t) => ({ id: t.id, title: t.title, isrc: t.isrc, trackNumber: t.trackNumber, artists: t.artists })), argv, albumMeta);
     console.log(JSON.stringify({ type: 'album', id: album.id, title: album.title, artist: album.artists?.[0]?.name || '', trackCount: album.trackCount, downloaded: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results }, null, 2));
     return;
   }
 
   const track = await getTrack(asin).catch(() => null);
   if (track) {
-    const results = await downloadTracks([{ id: track.id, title: track.title, artists: track.artists, album: track.album, artwork: track.artwork }], argv, { title: track.album?.title, artwork: track.artwork });
-    console.log(JSON.stringify({ type: 'track', id: track.id, title: track.title, ...results[0] }, null, 2));
+    const results = await downloadTracks([{ id: track.id, title: track.title, isrc: track.isrc, artists: track.artists, album: track.album, artwork: track.artwork }], argv, { title: track.album?.title, artwork: track.artwork });
+    console.log(JSON.stringify({ type: 'track', ...results[0] }, null, 2));
     return;
   }
   const album = await getAlbum(asin).catch(() => null);
   if (album) {
     const albumMeta = { title: album.title, artists: album.artists, year: (album.releaseDate || '').slice(0, 4) || null, artwork: album.artwork, copyright: album.copyright };
-    const results = await downloadTracks((album.tracks || []).map((t) => ({ id: t.id, title: t.title, trackNumber: t.trackNumber, artists: t.artists })), argv, albumMeta);
+    const results = await downloadTracks((album.tracks || []).map((t) => ({ id: t.id, title: t.title, isrc: t.isrc, trackNumber: t.trackNumber, artists: t.artists })), argv, albumMeta);
     console.log(JSON.stringify({ type: 'album', id: album.id, title: album.title, artist: album.artists?.[0]?.name || '', trackCount: album.trackCount, downloaded: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results }, null, 2));
     return;
   }

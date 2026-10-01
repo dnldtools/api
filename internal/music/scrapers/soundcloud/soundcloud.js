@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-import { writeFileSync, unlinkSync, renameSync } from 'node:fs';
+import { writeFileSync, unlinkSync, renameSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
 const API = 'https://api-v2.soundcloud.com';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
-const CLIENT_ID = process.env.SOUNDCLOUD_CLIENT_ID || 'pmagYZKQF6mRtNmtRzPkXSQJ76jYHLN8';
+const CLIENT_ID = process.env.SOUNDCLOUD_CLIENT_ID || 'Wq8jpsB4RfUsrezgEFDFfBGhkClF0sUN';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const err = (m) => { throw new Error(m); };
@@ -152,36 +152,53 @@ async function getUser(id) {
   return pickUser(await get(`users/${id}`));
 }
 
-async function streamUrl(track) {
+async function streamFormats(track) {
   const trans = track.transcodings || [];
-  const pick = (pred) => trans.find(pred);
-  const candidates = [
-    pick((x) => x.protocol === 'progressive'),
-    pick((x) => x.protocol === 'hls' && x.mimeType.includes('mp4')) || pick((x) => x.protocol === 'hls'),
-    pick((x) => x.protocol === 'cbc-encrypted-hls' || x.protocol === 'ctr-encrypted-hls'),
-  ].filter(Boolean);
-  const errors = [];
-  for (const c of candidates) {
-    try {
-      const res = await fetch(`${c.url}?client_id=${CLIENT_ID}`, { headers: { 'user-agent': UA } });
-      const { ok, data } = await jres(res);
-      if (!ok || !data.url) { errors.push(`${c.protocol} ${res.status}`); continue; }
-      const mp4 = /mp4/i.test(c.mimeType);
-      if (c.protocol === 'progressive') return { kind: 'progressive', url: data.url, ext: 'mp3' };
-      if (c.protocol === 'hls') return { kind: 'hls', url: data.url, ext: mp4 ? 'm4a' : 'mp3' };
-      return { kind: 'hls', url: data.url, ext: mp4 ? 'm4a' : 'mp3' };
-    } catch (e) { errors.push(`${c.protocol}: ${e.message}`); }
+  const byCodec = new Map();
+  for (const c of trans) {
+    const codec = codecOf(c.mimeType);
+    if (!byCodec.has(codec)) byCodec.set(codec, []);
+    byCodec.get(codec).push(c);
   }
-  err(`no streamable transcoding for track ${track.id} (${errors.join('; ')})`);
+  const out = [];
+  for (const [codec, list] of byCodec) {
+    const pick = list.find((x) => x.protocol === 'progressive') || list.find((x) => x.protocol === 'hls') || list.find((x) => !/encrypted/i.test(x.protocol)) || list[0];
+    try {
+      const res = await fetch(`${pick.url}?client_id=${CLIENT_ID}`, { headers: { 'user-agent': UA } });
+      const { ok, data } = await jres(res);
+      if (!ok || !data.url) continue;
+      out.push({ codec, protocol: pick.protocol, url: data.url, ext: extOfCodec(codec), mimeType: pick.mimeType });
+    } catch {}
+  }
+  return out;
 }
 
-async function hlsSegments(m3u8Url) {
-  const text = (await rawFetch(m3u8Url)).toString('utf-8');
-  const base = m3u8Url.split('?')[0];
-  const baseDir = base.slice(0, base.lastIndexOf('/') + 1);
-  const q = m3u8Url.includes('?') ? '?' + m3u8Url.split('?')[1] : '';
-  const segs = text.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
-  return segs.map((s) => (/^https?:/i.test(s) ? s : baseDir + s) + (s.includes('?') ? '' : q));
+function codecOf(mimeType) {
+  const m = String(mimeType || '').toLowerCase();
+  if (m.includes('mpeg') || m.includes('mp3')) return 'mp3';
+  if (m.includes('opus') || m.includes('webm')) return 'opus';
+  if (m.includes('mp4a') || m.includes('aac') || m.includes('mp4')) return 'aac';
+  return 'mp3';
+}
+
+function extOfCodec(codec) {
+  if (codec === 'aac') return 'm4a';
+  if (codec === 'opus') return 'opus';
+  return 'mp3';
+}
+
+async function probeBitrate(path) {
+  try {
+    const out = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=bit_rate', '-of', 'default=nw=1:nk=1', path], { encoding: 'utf8' });
+    const n = Number((out.split('\n')[0] || '').trim());
+    return Number.isFinite(n) && n > 0 ? Math.round(n / 1000) : 0;
+  } catch { return 0; }
+}
+
+function formatLabel(codec, protocol, bitrate) {
+  const kind = codec === 'aac' ? 'AAC' : codec.toUpperCase();
+  const proto = protocol === 'progressive' ? 'progressive' : 'HLS';
+  return bitrate ? `${kind} · ${bitrate} kbps (${proto})` : `${kind} (${proto})`;
 }
 
 function runFfmpeg(args) {
@@ -219,36 +236,33 @@ async function tagFile(path, track) {
   return path;
 }
 
-function extFor(track) {
-  const trans = track.transcodings || [];
-  if (trans.some((x) => x.protocol === 'progressive')) return 'mp3';
-  const hls = trans.find((x) => x.protocol === 'hls' && x.mimeType.includes('mp4')) || trans.find((x) => x.protocol === 'hls');
-  return hls && hls.mimeType.includes('mp4') ? 'm4a' : 'mp3';
-}
-
-async function downloadTrack(track, outPath) {
-  const s = await streamUrl(track);
-  if (s.kind === 'progressive') {
-    const bytes = await rawFetch(s.url);
-    const out = outPath || `${track.id}.mp3`;
-    if (out === '-') { process.stdout.write(bytes); return out; }
-    writeFileSync(out, bytes);
-    process.stderr.write(`${out}: ${(bytes.length / 1048576).toFixed(1)} MiB (mp3, progressive)\n`);
-    await tagFile(out, track);
-    return out;
+async function downloadTrackFormats(track, outPrefix) {
+  const forms = await streamFormats(track);
+  if (!forms.length) err(`no streamable transcoding for track ${track.id}`);
+  const files = [];
+  for (const s of forms) {
+    const out = `${outPrefix}.${s.ext}`;
+    try {
+      if (s.protocol === 'progressive') {
+        writeFileSync(out, await rawFetch(s.url));
+      } else {
+        if (!runFfmpeg(['-y', '-hide_banner', '-loglevel', 'error', '-i', s.url, '-c', 'copy', out])) throw new Error('ffmpeg rejected input');
+      }
+      if (!existsSync(out)) throw new Error('no output produced');
+      await tagFile(out, track);
+      const bitrate = await probeBitrate(out);
+      files.push({
+        path: out,
+        ext: s.ext,
+        codec: s.codec,
+        quality: s.protocol === 'progressive' ? 'PROGRESSIVE' : 'HLS',
+        bitrate,
+        label: formatLabel(s.codec, s.protocol, bitrate),
+      });
+    } catch (e) { process.stderr.write(`skip ${s.codec}: ${e.message}\n`); }
   }
-  const out = outPath || `${track.id}.${s.ext}`;
-  if (out === '-') {
-    const segs = await hlsSegments(s.url);
-    const chunks = [];
-    for (const u of segs) chunks.push(await rawFetch(u));
-    process.stdout.write(Buffer.concat(chunks));
-    return out;
-  }
-  runFfmpeg(['-y', '-hide_banner', '-loglevel', 'error', '-i', s.url, '-c', 'copy', out]);
-  process.stderr.write(`${out}: hls ${s.ext} (ffmpeg copy)\n`);
-  await tagFile(out, track);
-  return out;
+  if (!files.length) err(`every transcoding failed for track ${track.id}`);
+  return files;
 }
 
 async function search(q, type = 'tracks', limit = 10) {
@@ -290,8 +304,7 @@ async function cmdDownload(arg, argv) {
       fs.mkdirSync(dir, { recursive: true });
       for (let i = 0; i < list.length; i++) {
         process.stderr.write(`[${i + 1}/${list.length}] ${list[i].title}\n`);
-        const ext = extFor(list[i]);
-        try { await downloadTrack(list[i], `${dir}/${String(i + 1).padStart(2, '0')} - ${list[i].title.replace(/[\\/:*?"<>|]/g, '_')}.${ext}`); }
+        try { await downloadTrackFormats(list[i], `${dir}/${String(i + 1).padStart(2, '0')} - ${list[i].title.replace(/[\\/:*?"<>|]/g, '_')}`); }
         catch (e) { process.stderr.write(`  skip: ${e.message}\n`); }
       }
       process.stderr.write(`done -> ${dir}\n`);
@@ -300,7 +313,8 @@ async function cmdDownload(arg, argv) {
     if (r.type === 'track') track = r;
     else err(`cannot download a ${r.type}`);
   }
-  await downloadTrack(track, out);
+  const files = await downloadTrackFormats(track, out);
+  console.log(JSON.stringify({ ok: true, id: String(track.id), files }));
 }
 
 async function main() {

@@ -19,6 +19,7 @@ const CLIENTS = {
 };
 
 const QUALITIES = ['LOW', 'HIGH', 'LOSSLESS', 'HI_RES', 'HI_RES_LOSSLESS'];
+const QUALITY_ORDER = ['HI_RES_LOSSLESS', 'HI_RES', 'LOSSLESS', 'HIGH', 'LOW'];
 const MIME_EMU = 'application/vnd.tidal.emu';
 const MIME_BTS = 'application/vnd.tidal.bts';
 const MIME_DASH = 'application/dash+xml';
@@ -215,21 +216,33 @@ function parseTidalUrl(u) {
 
 async function tryStream(trackId, quality) {
   try {
-    const pbi = await getPlaybackInfo(trackId, { quality });
+    const { pbi } = await resolvePlayback(trackId, quality);
     return { stream: streamInfo(trackId, pbi) };
   } catch (e) {
     return { stream: null, error: e.message };
   }
 }
 
+async function resolvePlayback(trackId, quality) {
+  if (quality !== 'BEST') return { pbi: await getPlaybackInfo(trackId, { quality }), quality };
+  for (const q of QUALITY_ORDER) {
+    try {
+      const pbi = await getPlaybackInfo(trackId, { quality: q });
+      const info = streamInfo(trackId, pbi);
+      if (info.urls?.length && !info.licenseUrl) return { pbi, quality: q };
+    } catch {}
+  }
+  err('no playable quality for this account (HiFi/HiFi Plus subscription required)');
+}
+
 async function cmdUrl(url, argv) {
   const { type, id } = parseTidalUrl(url);
-  const quality = flag(argv, '--quality', 'LOSSLESS');
+  const quality = flag(argv, '--quality', 'BEST');
 
   if (type === 'track') {
     const meta = await getTrack(id);
     const s = await tryStream(id, quality);
-    console.log(JSON.stringify({ type: 'track', ...meta, ...s }, null, 2));
+    console.log(JSON.stringify({ type: 'track', ...meta, stream: s.stream ? summarizeStream(s.stream) : null, streamError: s.error || null }, null, 2));
     return;
   }
 
@@ -245,8 +258,8 @@ async function cmdUrl(url, argv) {
       for (const t of tracks) {
         const base = `${String(t.trackNumber ?? t.id).padStart(2, '0')} - ${t.artist} - ${t.title}`.replace(/[\\/:*?"<>|]/g, '_');
         try {
-          const out = await downloadTrack(String(t.id), join(dir, base), { quality, meta: t, year });
-          results.push({ id: t.id, title: t.title, ok: true, out });
+          const r = await downloadTrack(String(t.id), join(dir, base), { quality, meta: t, year });
+          results.push({ id: t.id, title: t.title, ok: true, out: r.path, file: describeFile(r.path, r.info) });
         } catch (e) { results.push({ id: t.id, title: t.title, ok: false, error: e.message }); }
       }
       console.log(JSON.stringify({ type: 'album', id: album.id, title: album.title, artist: artistName, year, downloaded: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results }, null, 2));
@@ -255,7 +268,7 @@ async function cmdUrl(url, argv) {
     const items = [];
     for (const t of tracks) {
       const s = await tryStream(t.id, quality);
-      items.push({ ...t, ...s });
+      items.push({ ...t, stream: s.stream ? summarizeStream(s.stream) : null, streamError: s.error || null });
     }
     console.log(JSON.stringify({
       type: 'album',
@@ -289,8 +302,8 @@ async function cmdUrl(url, argv) {
         const track = pickTrack(r.item);
         try {
           const base = `${String(track.trackNumber || track.id).padStart(2, '0')} - ${track.artist} - ${track.title}`.replace(/[\\/:*?"<>|]/g, '_');
-          const out = await downloadTrack(String(track.id), join(dir, base), { quality, meta: track });
-          results.push({ id: track.id, title: track.title, ok: true, out });
+          const r = await downloadTrack(String(track.id), join(dir, base), { quality, meta: track });
+          results.push({ id: track.id, title: track.title, ok: true, out: r.path, file: describeFile(r.path, r.info) });
         } catch (e) { results.push({ id: track.id, title: track.title, ok: false, error: e.message }); }
       }
       console.log(JSON.stringify({ type: 'playlist', id: pl.uuid || pl.id, title: pl.title, downloaded: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results }, null, 2));
@@ -463,23 +476,58 @@ async function fetchCoverTemp(url) {
   } catch { return null; }
 }
 
-async function embedMetadata(inPath, meta) {
-  const ext = inPath.includes('.') ? inPath.slice(inPath.lastIndexOf('.')) : '.m4a';
-  const tmp = `${inPath}.tagging${ext}`;
-  const cover = await fetchCoverTemp(meta.cover?.['1280']);
+function streamLabel(info) {
+  const codec = String(info.codecs || '').toLowerCase();
+  const kind = codec.includes('flac') ? 'FLAC' : codec.includes('mp4a') ? 'AAC' : (codec || 'AUDIO').toUpperCase();
+  const spec = [info.bitDepth ? `${info.bitDepth}-bit` : null, info.sampleRate ? `${(info.sampleRate / 1000).toFixed(1)}kHz` : null].filter(Boolean).join('/');
+  const head = [kind, info.audioQuality].filter(Boolean).join(' · ');
+  return spec ? `${head} (${spec})` : head;
+}
+
+function describeFile(path, info) {
+  return {
+    path,
+    ext: extFor(info),
+    quality: info.audioQuality || null,
+    codec: info.codecs || null,
+    bitDepth: info.bitDepth || null,
+    sampleRate: info.sampleRate || null,
+    label: streamLabel(info),
+  };
+}
+
+function summarizeStream(info) {
+  if (!info) return null;
+  return {
+    trackId: info.trackId,
+    audioQuality: info.audioQuality,
+    audioMode: info.audioMode,
+    bitDepth: info.bitDepth,
+    sampleRate: info.sampleRate,
+    assetPresentation: info.assetPresentation,
+    manifestMimeType: info.manifestMimeType,
+    codecs: info.codecs,
+    duration: info.duration || null,
+    drm: Boolean(info.licenseUrl),
+    label: streamLabel(info),
+  };
+}
+
+async function embedMetadata(inPath, outPath, meta) {
+  const cover = await fetchCoverTemp(meta.cover?.['1280'] || meta.cover?.['640']);
   const args = ['-y', '-i', inPath];
   if (cover) args.push('-i', cover);
   args.push('-map', '0:a');
   if (cover) args.push('-map', '1:v', '-c:v', 'copy', '-disposition:v:0', 'attached_pic');
   args.push('-c:a', 'copy');
-  if (/\.(m4a|mp4)$/i.test(inPath)) args.push('-movflags', '+faststart');
-  args.push('-fflags', '+bitexact', ...tagArgs(meta), tmp);
+  if (/\.(m4a|mp4)$/i.test(outPath)) args.push('-movflags', '+faststart');
+  if (/\.flac$/i.test(outPath) && meta.isrc) args.push('-metadata:s:a:0', `isrc=${meta.isrc}`);
+  args.push('-fflags', '+bitexact', ...tagArgs(meta), outPath);
   runFfmpeg(args);
   if (cover) unlinkSync(cover);
-  unlinkSync(inPath);
-  renameSync(tmp, inPath);
-  if (/\.(m4a|mp4)$/i.test(inPath) && meta.isrc) {
-    try { execFileSync('python', [fileURLToPath(new URL('./mp4tags.py', import.meta.url)), inPath, '--isrc', String(meta.isrc)], { stdio: 'ignore' }); }
+  if (inPath !== outPath) unlinkSync(inPath);
+  if (/\.(m4a|mp4)$/i.test(outPath) && meta.isrc) {
+    try { execFileSync('python', [fileURLToPath(new URL('./mp4tags.py', import.meta.url)), outPath, '--isrc', String(meta.isrc)], { stdio: 'ignore' }); }
     catch {}
   }
 }
@@ -493,44 +541,50 @@ async function albumYear(albumId) {
   return y;
 }
 
-async function downloadTrack(trackId, outPath, { quality = 'HIGH', meta = null, year = null } = {}) {
-  const pbi = await getPlaybackInfo(trackId, { quality });
+async function downloadTrack(trackId, outPath, { quality = 'BEST', meta = null, year = null } = {}) {
+  const { pbi, quality: picked } = await resolvePlayback(trackId, quality);
   const info = streamInfo(trackId, pbi);
   const token = await getUserToken();
   const parts = info.urls?.length ? [...info.urls] : [];
-  if (!parts.length) err(`no stream urls — assetPresentation=${info.assetPresentation}; quality ${quality} needs a HiFi/HiFi Plus subscription`);
+  if (!parts.length) err(`no stream urls — assetPresentation=${info.assetPresentation}; quality ${picked} needs a HiFi/HiFi Plus subscription`);
   let out = outPath || String(trackId);
   if (!/\.(m4a|mp4|flac|m3u8)$/i.test(out)) out = `${out}.${extFor(info)}`;
+  const frag = `${out}.frag.mp4`;
   if (parts.length === 1) {
-    await downloadUrl(parts[0], out, token);
+    await downloadUrl(parts[0], frag, token);
   } else {
-    writeFileSync(out, Buffer.alloc(0));
+    writeFileSync(frag, Buffer.alloc(0));
     for (let i = 0; i < parts.length; i++) {
       const res = await fetch(parts[i], { headers: { authorization: `Bearer ${token}` } });
       if (!res.ok) throw new Error(`segment ${i} ${res.status} ${res.statusText}`);
-      appendFileSync(out, Buffer.from(await res.arrayBuffer()));
+      appendFileSync(frag, Buffer.from(await res.arrayBuffer()));
       process.stderr.write(`\rsegment ${i + 1}/${parts.length}`);
     }
     process.stderr.write('\n');
   }
-  const canTag = out !== '-' && !info.licenseUrl && info.manifestMimeType !== MIME_HLS;
+  const canTag = !info.licenseUrl && info.manifestMimeType !== MIME_HLS;
   if (canTag) {
     try {
       const m = meta || await getTrack(trackId);
       m.year = year ?? null;
       if (m.year == null && m.albumId) m.year = await albumYear(m.albumId);
-      await embedMetadata(out, m);
-    } catch (e) { process.stderr.write(`tag warning: ${e.message}\n`); }
+      await embedMetadata(frag, out, m);
+    } catch (e) {
+      process.stderr.write(`tag warning: ${e.message}\n`);
+      try { renameSync(frag, out); } catch {}
+    }
+  } else {
+    renameSync(frag, out);
   }
-  console.log(JSON.stringify(info, null, 2));
-  return out;
+  return { path: out, info, quality: picked };
 }
 
 function extFor(info) {
   if (info.manifestMimeType === MIME_HLS) return 'm3u8';
-  if (String(info.codecs || '').includes('flac')) return 'flac.mp4';
-  if (String(info.codecs || '').includes('mp4a')) return 'm4a';
-  if (info.audioQuality === 'LOSSLESS' || info.audioQuality.startsWith('HI_RES')) return 'flac';
+  const codec = String(info.codecs || '');
+  if (codec.includes('flac')) return 'flac';
+  if (codec.includes('mp4a') || codec.includes('aac')) return 'm4a';
+  if (info.audioQuality === 'LOSSLESS' || String(info.audioQuality || '').startsWith('HI_RES')) return 'flac';
   return 'm4a';
 }
 
@@ -589,14 +643,16 @@ async function main() {
   if (cmd === 'artist-tracks') { console.log(JSON.stringify(await getArtistTopTracks(Number(argv[1])), null, 2)); return; }
 
   if (cmd === 'playback') {
-    const pbi = await getPlaybackInfo(String(argv[1]), { quality: flag(argv, '--quality', 'LOSSLESS') });
-    console.log(JSON.stringify(streamInfo(String(argv[1]), pbi), null, 2));
+    const { pbi, quality } = await resolvePlayback(String(argv[1]), flag(argv, '--quality', 'BEST'))
+      .catch((e) => { err(e.message); });
+    const info = streamInfo(String(argv[1]), pbi);
+    console.log(JSON.stringify({ ...summarizeStream(info), quality, urls: info.urls }, null, 2));
     return;
   }
 
   if (cmd === 'download') {
-    const out = await downloadTrack(String(argv[1]), flag(argv, '--out', ''), { quality: flag(argv, '--quality', 'LOSSLESS') });
-    console.log(`saved: ${out}`);
+    const r = await downloadTrack(String(argv[1]), flag(argv, '--out', ''), { quality: flag(argv, '--quality', 'BEST') });
+    console.log(JSON.stringify({ ok: true, id: String(argv[1]), files: [describeFile(r.path, r.info)] }));
     return;
   }
 
