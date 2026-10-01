@@ -161,7 +161,6 @@ func Load() (*Config, error) {
 		TempDir:          env.Get("MUSIC_TEMP_DIR", ""),
 		Timeout:          env.GetDuration("MUSIC_TIMEOUT", 15*time.Minute),
 		ResolveTimeout:   env.GetDuration("MUSIC_RESOLVE_TIMEOUT", 90*time.Second),
-		TidalQuality:     env.Get("TIDAL_QUALITY", "LOSSLESS"),
 	}
 	cfg.MusicEnabled = env.GetBool("MUSIC_ENABLED", true)
 

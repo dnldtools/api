@@ -100,35 +100,57 @@ func (s *Service) downloadApple(ctx context.Context, d *resolveData) error {
 	for i := range d.Tracks {
 		t := &d.Tracks[i]
 		prefix := trackPrefix(t, i)
-		outPath := filepath.Join(tmpDir, prefix+".m4a")
-		_, stderr, err := s.run(ctx, s.cfg.PythonBin, s.appleDir, []string{wv, t.ID, "--device", device, "--sf", sf, "--out", outPath}, PlatformApple)
+		outPrefix := filepath.Join(tmpDir, prefix)
+		out, stderr, err := s.run(ctx, s.cfg.PythonBin, s.appleDir, []string{wv, t.ID, "--device", device, "--sf", sf, "--out", outPrefix}, PlatformApple)
 		if err != nil {
 			s.logger.Warn("music apple track failed", "id", t.ID, "error", err, "stderr", strings.TrimSpace(stderr))
 			continue
 		}
-		if _, statErr := os.Stat(outPath); statErr != nil {
+		raw, perr := parseJSON(out)
+		if perr != nil {
+			s.logger.Warn("music apple parse failed", "id", t.ID, "error", perr, "stderr", strings.TrimSpace(stderr))
+			continue
+		}
+		if _, present := raw["ok"]; present && !boolv(raw, "ok") {
 			s.logger.Warn("music apple no output", "id", t.ID, "stderr", strings.TrimSpace(stderr))
 			continue
 		}
-		signed, mediaID, size, err := s.uploadFile(ctx, PlatformApple, t.ID, 0, outPath, "m4a")
-		if err != nil {
-			s.logger.Warn("music apple upload failed", "id", t.ID, "error", err)
+		files := parseFileList(raw)
+		if len(files) == 0 {
+			s.logger.Warn("music apple produced no files", "id", t.ID, "stderr", strings.TrimSpace(stderr))
 			continue
 		}
-		t.URL = signed
-		t.Ext = "m4a"
-		t.Size = size
-		t.MediaID = mediaID
-		t.Formats = []TrackFormat{{
-			Type:    "audio",
-			URL:     signed,
-			Ext:     "m4a",
-			Quality: "AAC",
-			Codec:   "mp4a.40.2",
-			Label:   "AAC · 256 kbps",
-			Size:    size,
-			MediaID: mediaID,
-		}}
+		t.Formats = nil
+		uploaded := 0
+		for j, f := range files {
+			signed, mediaID, size, uerr := s.uploadFile(ctx, PlatformApple, t.ID, j, f.path, f.ext)
+			if uerr != nil {
+				s.logger.Warn("music apple upload failed", "id", t.ID, "ext", f.ext, "error", uerr)
+				continue
+			}
+			t.Formats = append(t.Formats, TrackFormat{
+				Type:     "audio",
+				URL:      signed,
+				Ext:      f.ext,
+				Quality:  f.quality,
+				Codec:    f.codec,
+				Label:    f.label,
+				Bitrate:  f.bitrate,
+				BitDepth: f.bitDepth,
+				Size:     size,
+				MediaID:  mediaID,
+			})
+			if t.URL == "" {
+				t.URL = signed
+				t.Ext = f.ext
+				t.Size = size
+				t.MediaID = mediaID
+			}
+			uploaded++
+		}
+		if uploaded == 0 {
+			continue
+		}
 		ok++
 	}
 	if ok == 0 {
@@ -188,11 +210,7 @@ func (s *Service) downloadOneSoundCloud(ctx context.Context, t Track, tmpDir, pr
 }
 
 func (s *Service) downloadOneTidal(ctx context.Context, t Track, tmpDir, prefix string) ([]localFormat, error) {
-	q := s.cfg.TidalQuality
-	if q == "" {
-		q = "BEST"
-	}
-	out, stderr, err := s.run(ctx, s.cfg.NodeBin, s.tidalDir, []string{"tidal.js", "download", t.ID, "--out", filepath.Join(tmpDir, prefix), "--quality", q}, PlatformTidal)
+	out, stderr, err := s.run(ctx, s.cfg.NodeBin, s.tidalDir, []string{"tidal.js", "download", t.ID, "--out", filepath.Join(tmpDir, prefix)}, PlatformTidal)
 	if err != nil {
 		return nil, fmt.Errorf("tidal download %s: %w: %s", t.ID, err, strings.TrimSpace(stderr))
 	}

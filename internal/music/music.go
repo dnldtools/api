@@ -43,7 +43,6 @@ type Config struct {
 	ResolveTimeout   time.Duration
 	NodeBin          string
 	PythonBin        string
-	TidalQuality     string
 }
 
 type Track struct {
@@ -172,9 +171,6 @@ func New(cfg Config, mgr *r2.Manager, store *media.Store, logger *slog.Logger) (
 	}
 	if cfg.TempDir == "" {
 		cfg.TempDir = os.TempDir()
-	}
-	if cfg.TidalQuality == "" {
-		cfg.TidalQuality = "BEST"
 	}
 	cfg.AmazonCookie = absPath(cfg.AmazonCookie)
 	cfg.AppleCookie = absPath(cfg.AppleCookie)
@@ -437,7 +433,7 @@ func resultFromResolve(p Platform, url string, d *resolveData) *Result {
 				Artist:     t.Artist,
 			})
 		}
-		if t.URL != "" {
+		if len(t.Formats) == 0 && t.URL != "" {
 			res.Formats = append(res.Formats, Format{
 				Type:    "audio",
 				URL:     t.URL,

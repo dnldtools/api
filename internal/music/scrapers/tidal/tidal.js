@@ -258,8 +258,8 @@ async function cmdUrl(url, argv) {
       for (const t of tracks) {
         const base = `${String(t.trackNumber ?? t.id).padStart(2, '0')} - ${t.artist} - ${t.title}`.replace(/[\\/:*?"<>|]/g, '_');
         try {
-          const r = await downloadTrack(String(t.id), join(dir, base), { quality, meta: t, year });
-          results.push({ id: t.id, title: t.title, ok: true, out: r.path, file: describeFile(r.path, r.info) });
+          const files = await downloadTrackAll(String(t.id), join(dir, base), { meta: t, year });
+          results.push({ id: t.id, title: t.title, ok: true, files });
         } catch (e) { results.push({ id: t.id, title: t.title, ok: false, error: e.message }); }
       }
       console.log(JSON.stringify({ type: 'album', id: album.id, title: album.title, artist: artistName, year, downloaded: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results }, null, 2));
@@ -302,8 +302,8 @@ async function cmdUrl(url, argv) {
         const track = pickTrack(r.item);
         try {
           const base = `${String(track.trackNumber || track.id).padStart(2, '0')} - ${track.artist} - ${track.title}`.replace(/[\\/:*?"<>|]/g, '_');
-          const r = await downloadTrack(String(track.id), join(dir, base), { quality, meta: track });
-          results.push({ id: track.id, title: track.title, ok: true, out: r.path, file: describeFile(r.path, r.info) });
+          const files = await downloadTrackAll(String(track.id), join(dir, base), { meta: track });
+          results.push({ id: track.id, title: track.title, ok: true, files });
         } catch (e) { results.push({ id: track.id, title: track.title, ok: false, error: e.message }); }
       }
       console.log(JSON.stringify({ type: 'playlist', id: pl.uuid || pl.id, title: pl.title, downloaded: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results }, null, 2));
@@ -417,6 +417,7 @@ function streamInfo(trackId, pbi) {
     s.mediaTemplate = m.dash.media;
     s.segmentCount = m.dash.segmentCount;
     s.segments = m.dash.segments;
+    if (m.dash.bandwidth) s.bandwidth = Number(m.dash.bandwidth);
   } else if (m.playlist) {
     s.playlist = m.playlist;
   }
@@ -490,6 +491,7 @@ function describeFile(path, info) {
     ext: extFor(info),
     quality: info.audioQuality || null,
     codec: info.codecs || null,
+    bitrate: info.bandwidth || null,
     bitDepth: info.bitDepth || null,
     sampleRate: info.sampleRate || null,
     label: streamLabel(info),
@@ -541,12 +543,10 @@ async function albumYear(albumId) {
   return y;
 }
 
-async function downloadTrack(trackId, outPath, { quality = 'BEST', meta = null, year = null } = {}) {
-  const { pbi, quality: picked } = await resolvePlayback(trackId, quality);
-  const info = streamInfo(trackId, pbi);
+async function saveStream(trackId, outPath, info, meta, year) {
   const token = await getUserToken();
   const parts = info.urls?.length ? [...info.urls] : [];
-  if (!parts.length) err(`no stream urls — assetPresentation=${info.assetPresentation}; quality ${picked} needs a HiFi/HiFi Plus subscription`);
+  if (!parts.length) err(`no stream urls — assetPresentation=${info.assetPresentation}`);
   let out = outPath || String(trackId);
   if (!/\.(m4a|mp4|flac|m3u8)$/i.test(out)) out = `${out}.${extFor(info)}`;
   const frag = `${out}.frag.mp4`;
@@ -576,7 +576,29 @@ async function downloadTrack(trackId, outPath, { quality = 'BEST', meta = null, 
   } else {
     renameSync(frag, out);
   }
-  return { path: out, info, quality: picked };
+  return out;
+}
+
+async function downloadTrackAll(trackId, outPrefix, { meta = null, year = null } = {}) {
+  const files = [];
+  const seen = new Set();
+  let lastError = null;
+  for (const q of QUALITY_ORDER) {
+    let pbi;
+    try { pbi = await getPlaybackInfo(trackId, { quality: q }); }
+    catch (e) { lastError = e.message; continue; }
+    const info = streamInfo(trackId, pbi);
+    if (!info.urls?.length || info.licenseUrl) continue;
+    const key = `${info.audioQuality}:${info.bitDepth}:${info.sampleRate}:${info.codecs}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      const saved = await saveStream(trackId, `${outPrefix}.${q.toLowerCase()}`, info, meta, year);
+      files.push(describeFile(saved, info));
+    } catch (e) { lastError = e.message; }
+  }
+  if (!files.length) err(lastError ? `no playable quality (${lastError})` : 'no playable quality for this account (HiFi/HiFi Plus subscription required)');
+  return files;
 }
 
 function extFor(info) {
@@ -651,8 +673,11 @@ async function main() {
   }
 
   if (cmd === 'download') {
-    const r = await downloadTrack(String(argv[1]), flag(argv, '--out', ''), { quality: flag(argv, '--quality', 'BEST') });
-    console.log(JSON.stringify({ ok: true, id: String(argv[1]), files: [describeFile(r.path, r.info)] }));
+    const id = String(argv[1]);
+    const out = flag(argv, '--out', '') || id;
+    const meta = await getTrack(id).catch(() => null);
+    const files = await downloadTrackAll(id, out, { meta });
+    console.log(JSON.stringify({ ok: true, id, files }));
     return;
   }
 

@@ -233,28 +233,28 @@ def write_mp4_isrc(path, meta):
         print(f"[-] mp4 tag warning: {e}", file=sys.stderr)
 
 
-def process_track(track_id, device_path, out, sf, flavor, tag=True):
-    song = get_playback(track_id)
-    asset = pick_asset(song, flavor)
-    print(f"[+] flavor={asset['flavor']} bitRate={asset.get('metadata', {}).get('bitRate')}", file=sys.stderr)
+def bitrate_kbps(value):
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return 0
+    if n <= 0:
+        return 0
+    return round(n / 1000) if n > 10000 else n
 
+
+def process_asset(song, asset, track_id, device_path, out_prefix, sf, meta, tag=True):
+    flavor = asset.get("flavor") or "unknown"
+    kbps = bitrate_kbps((asset.get("metadata") or {}).get("bitRate"))
     m3u8_url = asset["URL"]
     m3u8_text = requests.get(m3u8_url, timeout=30).text
     kid, mp4_url = parse_m3u8(m3u8_text, m3u8_url)
-    print(f"[+] KID {kid.hex()}", file=sys.stderr)
-
     keys = fetch_content_keys(song, track_id, kid, device_path)
-    for k in keys:
-        print(f"[+] {k.kid.hex}={k.key.hex()} ({k.type})", file=sys.stderr)
 
-    meta = get_metadata(track_id, sf) if tag else {}
-    default_out = f"{sanitize(meta.get('artist',''))} - {sanitize(meta.get('title',''))}.m4a" if tag else f"{track_id}.m4a"
-    out_path = out or default_out
-
+    slug = str(kbps) if kbps else flavor.replace(":", "-")
+    out_path = f"{out_prefix}.{slug}.m4a"
     with tempfile_path() as enc_path:
-        print(f"[+] downloading encrypted mp4: {mp4_url[:80]}...", file=sys.stderr)
         download(mp4_url, enc_path)
-        print("[+] decrypting with ffmpeg...", file=sys.stderr)
         decrypt(keys, enc_path, out_path)
 
     if tag and meta:
@@ -263,16 +263,53 @@ def process_track(track_id, device_path, out, sf, flavor, tag=True):
             if meta.get("artwork"):
                 cover = os.path.join(os.path.dirname(os.path.abspath(out_path)) or ".", ".apple_cover.jpg")
                 download(meta["artwork"], cover)
-            print("[+] injecting tags...", file=sys.stderr)
             tag_file(out_path, meta, track_id, cover)
-            if os.path.splitext(out_path)[1].lower() in (".m4a", ".mp4"):
-                write_mp4_isrc(out_path, meta)
+            write_mp4_isrc(out_path, meta)
         finally:
             if cover and os.path.exists(cover):
                 os.unlink(cover)
 
-    print(f"[+] saved {out_path}", file=sys.stderr)
-    return out_path
+    label = f"AAC \u00b7 {kbps} kbps" if kbps else f"AAC \u00b7 {flavor}"
+    return {
+        "path": out_path,
+        "ext": "m4a",
+        "quality": str(kbps) if kbps else flavor,
+        "codec": "mp4a.40.2",
+        "bitrate": kbps * 1000,
+        "label": label,
+    }
+
+
+def process_track_all(track_id, device_path, out_prefix, sf, flavor=None, tag=True):
+    song = get_playback(track_id)
+    assets = song.get("assets") or []
+    if flavor:
+        assets = [a for a in assets if a.get("flavor") == flavor]
+    if not assets:
+        raise RuntimeError("no assets in playback response")
+
+    meta = get_metadata(track_id, sf) if tag else {}
+    if not out_prefix:
+        base = f"{sanitize(meta.get('artist', ''))} - {sanitize(meta.get('title', ''))}" if tag else str(track_id)
+        out_prefix = base or str(track_id)
+
+    files = []
+    seen = set()
+    for asset in assets:
+        asset_flavor = asset.get("flavor") or "unknown"
+        kbps = bitrate_kbps((asset.get("metadata") or {}).get("bitRate"))
+        key = kbps or asset_flavor
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            files.append(process_asset(song, asset, track_id, device_path, out_prefix, sf, meta, tag))
+        except Exception as e:
+            print(f"[-] flavor {asset_flavor} failed: {e}", file=sys.stderr)
+
+    if not files:
+        raise RuntimeError("all flavors failed")
+    return files
 
 
 def tempfile_path():
@@ -309,12 +346,12 @@ def main():
     ap = argparse.ArgumentParser(description="Apple Music web-player Widevine full-track downloader")
     ap.add_argument("id", nargs="?", help="song/adamId, or use --album/--playlist")
     ap.add_argument("--device", required=True, help="pywidevine .wvd device file")
-    ap.add_argument("--out", help="output .m4a (default: 'Artist - Title.m4a')")
+    ap.add_argument("--out", help="output prefix (default: 'Artist - Title')")
     ap.add_argument("--sf", default="us", help="storefront (default us)")
-    ap.add_argument("--flavor", help="asset flavor, e.g. 28:ctrp256 (default: best available)")
+    ap.add_argument("--flavor", help="only download one asset flavor, e.g. 28:ctrp256")
     ap.add_argument("--album", metavar="ID", help="download every track of an album id")
     ap.add_argument("--playlist", metavar="ID", help="download every track of a playlist id")
-    ap.add_argument("--no-tag", dest="tag", action="store_false", help="skip metadata lookup, name output <id>.m4a")
+    ap.add_argument("--no-tag", dest="tag", action="store_false", help="skip metadata lookup, name output <id>.<n>.m4a")
     args = ap.parse_args()
 
     if not which("ffmpeg"):
@@ -334,12 +371,21 @@ def main():
         tracks = [args.id]
         batch = False
 
+    results = []
     for i, tid in enumerate(tracks, 1):
         print(f"[+] ({i}/{len(tracks)}) track {tid}", file=sys.stderr)
         try:
-            process_track(tid, args.device, args.out if not batch else None, args.sf, args.flavor, args.tag)
+            files = process_track_all(tid, args.device, args.out if not batch else None, args.sf, args.flavor, args.tag)
+            results.append({"id": str(tid), "ok": True, "files": files})
         except Exception as e:
             print(f"[-] failed {tid}: {e}", file=sys.stderr)
+            results.append({"id": str(tid), "ok": False, "error": str(e)})
+
+    payload = {"ok": any(r["ok"] for r in results), "results": results}
+    if len(results) == 1:
+        payload["id"] = results[0]["id"]
+        payload["files"] = results[0].get("files", [])
+    print(json.dumps(payload))
 
 
 if __name__ == "__main__":

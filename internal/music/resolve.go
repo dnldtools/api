@@ -613,7 +613,6 @@ func trackFromTidal(m map[string]any) Track {
 		Explicit:    boolv(m, "explicit"),
 		Copyright:   str(m, "copyright"),
 		Version:     str(m, "version"),
-		URL:         str(m, "url"),
 		Artwork:     a,
 		Metadata:    m,
 	}
