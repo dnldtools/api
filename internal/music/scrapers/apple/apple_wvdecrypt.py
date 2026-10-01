@@ -137,17 +137,22 @@ def download(url, path):
 
 
 def decrypt(keys, enc_path, out_path):
-    kid_key = ":".join(f"{k.kid.hex}={k.key.hex()}" for k in keys)
-    subprocess.run(
+    if len(keys) == 1:
+        dec_args = ["-decryption_key", keys[0].key.hex()]
+    else:
+        dec_args = ["-decryption_keys", ":".join(f"{k.kid.hex}={k.key.hex()}" for k in keys)]
+    proc = subprocess.run(
         [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-decryption_keys", kid_key,
+            *dec_args,
             "-i", enc_path,
             "-c", "copy",
             out_path,
         ],
-        check=True,
+        capture_output=True, text=True,
     )
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg exit {proc.returncode}: {(proc.stderr or '').strip()[:300]}")
 
 
 def artwork_url(attrs):

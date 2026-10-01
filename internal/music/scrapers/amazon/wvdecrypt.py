@@ -161,11 +161,16 @@ def ffmpeg_capture(cmd):
     return proc
 
 
+def decryption_args(keys):
+    if len(keys) == 1:
+        return ["-decryption_key", keys[0].key.hex()]
+    return ["-decryption_keys", ":".join(f"{k.kid.hex}={k.key.hex()}" for k in keys)]
+
+
 def decrypt_file(keys, mp4_path, out_path):
-    kid_key = ":".join(f"{k.kid.hex}={k.key.hex()}" for k in keys)
     cmd = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-        "-decryption_keys", kid_key,
+        *decryption_args(keys),
         "-i", mp4_path,
         "-c", "copy",
         out_path,
@@ -174,11 +179,10 @@ def decrypt_file(keys, mp4_path, out_path):
 
 
 def stream_decrypt(keys, mp4_url, codecs):
-    kid_key = ":".join(f"{k.kid.hex}={k.key.hex()}" for k in keys)
     fmt = "flac" if (codecs or "").startswith("flac") else "opus"
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error",
-        "-decryption_keys", kid_key,
+        *decryption_args(keys),
         "-i", mp4_url,
         "-c", "copy",
         "-f", fmt, "pipe:1",
