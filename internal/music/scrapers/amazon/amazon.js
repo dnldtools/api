@@ -60,6 +60,9 @@ function resolvePython() {
   return 'python3';
 }
 
+const FAIL_DETAIL = 260;
+const truncate = (s) => (s || '').replace(/\s+/g, ' ').trim().slice(-FAIL_DETAIL);
+
 function runCapture(cmd, args) {
   return new Promise((resolve) => {
     let out = '', errOut = '';
@@ -115,17 +118,22 @@ async function downloadTracks(tracks, argv, albumMeta = {}) {
     const meta = metaArgs(t, albumMeta);
     const made = new Set();
     const files = [];
+    const fails = [];
     for (const [q, defaultExt] of [['hires', 'flac'], ['hifi', 'flac'], ['std', 'opus']]) {
       let manifest;
       try { manifest = (await getStream(t.id, { quality: q }))?.manifest; }
-      catch { continue; }
-      if (!manifest?.pssh || !manifest?.licenseUrl || !manifest?.baseUrl) continue;
+      catch (e) { fails.push(`${q}: stream ${e.message}`); continue; }
+      if (!manifest) { fails.push(`${q}: no manifest`); continue; }
+      if (!manifest.pssh || !manifest.licenseUrl || !manifest.baseUrl) {
+        fails.push(`${q}: incomplete manifest pssh=${!!manifest.pssh} lic=${!!manifest.licenseUrl} base=${!!manifest.baseUrl} (${manifest.codecs || '?'})`);
+        continue;
+      }
       const ext = extForCodec(manifest.codecs) || defaultExt;
       let file = join(outdir, `${sanitize(t.title)}.${ext}`);
       if (made.has(file)) file = join(outdir, `${sanitize(t.title)}.${q}.${ext}`);
       made.add(file);
       const r = await runCapture(resolvePython(), [py, t.id, '--device', device, '--quality', q, '--out', file, ...meta]);
-      if (!r.ok) continue;
+      if (!r.ok) { fails.push(`${q}: wvdecrypt ${r.error || ''} ${truncate(r.errOut)}`.trim()); continue; }
       files.push({
         path: file,
         ext,
@@ -138,7 +146,7 @@ async function downloadTracks(tracks, argv, albumMeta = {}) {
       });
     }
     if (files.length) results.push({ id: t.id, title: t.title, ok: true, files });
-    else results.push({ id: t.id, title: t.title, ok: false, error: 'all qualities failed' });
+    else results.push({ id: t.id, title: t.title, ok: false, error: 'all qualities failed [' + fails.join(' | ') + ']' });
   }
   return results;
 }
