@@ -79,6 +79,8 @@ def pick_asset(song, flavor=None):
 
 
 def parse_m3u8(m3u8_text, m3u8_url):
+    if "METHOD=SAMPLE-AES" in m3u8_text or "com.apple.streamingkeydelivery" in m3u8_text:
+        raise RuntimeError("FairPlay flavor (SAMPLE-AES/skd), not Widevine-decryptable")
     m = re.search(r'URI="data:;base64,([^"]+)"', m3u8_text)
     if not m:
         raise RuntimeError("no KID in m3u8 (expected data:;base64,<kid>)")
@@ -290,6 +292,9 @@ def process_track_all(track_id, device_path, out_prefix, sf, flavor=None, tag=Tr
     assets = song.get("assets") or []
     if flavor:
         assets = [a for a in assets if a.get("flavor") == flavor]
+    else:
+        order = {f: i for i, f in enumerate(FLAVOR_RANK)}
+        assets = sorted(assets, key=lambda a: order.get(a.get("flavor"), len(order)))
     if not assets:
         raise RuntimeError("no assets in playback response")
 
@@ -299,16 +304,11 @@ def process_track_all(track_id, device_path, out_prefix, sf, flavor=None, tag=Tr
         out_prefix = base or str(track_id)
 
     files = []
-    seen = set()
     for asset in assets:
         asset_flavor = asset.get("flavor") or "unknown"
-        kbps = bitrate_kbps((asset.get("metadata") or {}).get("bitRate"))
-        key = kbps or asset_flavor
-        if key in seen:
-            continue
-        seen.add(key)
         try:
             files.append(process_asset(song, asset, track_id, device_path, out_prefix, sf, meta, tag))
+            break
         except Exception as e:
             print(f"[-] flavor {asset_flavor} failed: {e}", file=sys.stderr)
 
