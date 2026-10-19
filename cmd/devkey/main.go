@@ -22,12 +22,14 @@ func main() {
 
 func run() error {
 	var (
-		name    = flag.String("name", "dev", "account name")
-		role    = flag.String("role", string(auth.RoleUser), "account role (user|admin)")
-		plan    = flag.String("plan", string(plans.PlanPro), "plan (trial|free|pro)")
-		keyName = flag.String("key-name", "dev-cli", "API key name")
-		expires = flag.Duration("expires", 0, "optional key expiry duration (e.g. 720h); 0 = no expiry")
-		dbURL   = flag.String("database-url", "", "PostgreSQL URL (defaults to DATABASE_URL)")
+		name      = flag.String("name", "dev", "account name")
+		role      = flag.String("role", string(auth.RoleUser), "account role (user|admin)")
+		plan      = flag.String("plan", string(plans.PlanPro), "plan (trial|free|pro)")
+		keyName   = flag.String("key-name", "dev-cli", "API key name")
+		customKey = flag.String("custom", "", "custom API key string (skip random generation; min 8 chars, a-z A-Z 0-9 _ - .)")
+		accountID = flag.Int64("account-id", 0, "existing account id to attach the key to (0 = create new account)")
+		expires   = flag.Duration("expires", 0, "optional key expiry duration (e.g. 720h); 0 = no expiry")
+		dbURL     = flag.String("database-url", "", "PostgreSQL URL (defaults to DATABASE_URL)")
 	)
 	flag.Parse()
 
@@ -71,14 +73,31 @@ func run() error {
 
 	repo := auth.NewPostgresRepository(db.Pool())
 
-	accountID, err := repo.CreateAccount(ctx, *name, roleValue, string(planValue))
-	if err != nil {
-		return fmt.Errorf("create account: %w", err)
+	accID := *accountID
+	if accID > 0 {
+		acc, err := repo.FindAccount(ctx, accID)
+		if err != nil {
+			return fmt.Errorf("find account %d: %w", accID, err)
+		}
+		accID = acc.ID
+	} else {
+		accID, err = repo.CreateAccount(ctx, *name, roleValue, string(planValue))
+		if err != nil {
+			return fmt.Errorf("create account: %w", err)
+		}
 	}
 
-	rawKey, err := auth.GenerateKey()
-	if err != nil {
-		return fmt.Errorf("generate key: %w", err)
+	var rawKey string
+	if *customKey != "" {
+		if err := auth.ValidateCustomKey(*customKey); err != nil {
+			return err
+		}
+		rawKey = *customKey
+	} else {
+		rawKey, err = auth.GenerateKey()
+		if err != nil {
+			return fmt.Errorf("generate key: %w", err)
+		}
 	}
 
 	var expiresAt *time.Time
@@ -87,12 +106,12 @@ func run() error {
 		expiresAt = &t
 	}
 
-	keyID, err := repo.CreateKey(ctx, accountID, *keyName, auth.HashKey(rawKey), expiresAt)
+	keyID, err := repo.CreateKey(ctx, accID, *keyName, auth.HashKey(rawKey), expiresAt)
 	if err != nil {
 		return fmt.Errorf("create key: %w", err)
 	}
 
-	fmt.Printf("account_id: %d\n", accountID)
+	fmt.Printf("account_id: %d\n", accID)
 	fmt.Printf("api_key_id: %d\n", keyID)
 	fmt.Printf("api_key:    %s\n", rawKey)
 	fmt.Println()

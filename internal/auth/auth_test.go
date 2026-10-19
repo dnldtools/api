@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -163,6 +164,39 @@ func TestHashKey(t *testing.T) {
 	}
 	if h1 == "secret-key" {
 		t.Error("hash must never equal the raw key")
+	}
+}
+
+func TestValidateCustomKey(t *testing.T) {
+	valid := []string{
+		"mykey123",
+		"sam-pro-key.2024",
+		"mobile_app.secret",
+		"a1b2c3d4",
+	}
+	for _, k := range valid {
+		if err := ValidateCustomKey(k); err != nil {
+			t.Errorf("ValidateCustomKey(%q) = %v, want nil", k, err)
+		}
+	}
+	invalid := map[string]string{
+		"short":   "too short",
+		"has space": "contains space",
+		"has@char":  "invalid char",
+		"":          "empty",
+	}
+	for k, reason := range invalid {
+		if err := ValidateCustomKey(k); err == nil {
+			t.Errorf("ValidateCustomKey(%q) = nil, want error (%s)", k, reason)
+		}
+	}
+	long := strings.Repeat("a", 129)
+	if err := ValidateCustomKey(long); err == nil {
+		t.Error("ValidateCustomKey(129 chars) = nil, want too-long error")
+	}
+	ok := strings.Repeat("a", 128)
+	if err := ValidateCustomKey(ok); err != nil {
+		t.Errorf("ValidateCustomKey(128 chars) = %v, want nil", err)
 	}
 }
 
