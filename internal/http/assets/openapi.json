@@ -279,8 +279,8 @@
     "schemas": {
       "Platform": {
         "type": "string",
-        "description": "Optional platform hint for `POST /v1/downloads`. When omitted, the platform is detected from the URL. YouTube is intentionally excluded from this enum — YouTube URLs are served by the dedicated YouTube endpoints.",
-        "enum": ["facebook", "instagram", "tiktok", "shopee", "apple-music", "uc-share", "doodstream", "pinterest", "9xbuddy", "savefrom", "x", "threads"]
+        "description": "Optional platform hint for `POST /v1/downloads`. When omitted, the platform is detected from the URL. YouTube is intentionally excluded from this enum; YouTube URLs are served by the dedicated YouTube endpoints.",
+        "enum": ["facebook", "instagram", "tiktok", "shopee", "uc-share", "doodstream", "pinterest", "x", "threads"]
       },
       "MediaType": {
         "type": "string",
@@ -483,7 +483,7 @@
       "MusicPlatform": {
         "type": "string",
         "enum": ["apple-music", "amazon", "tidal", "soundcloud"],
-        "description": "Supported music platforms."
+        "description": "Detected automatically from the URL domain. apple-music (music.apple.com, itunes.apple.com), amazon (music.amazon.com), tidal (tidal.com, listen.tidal.com), soundcloud (soundcloud.com, on.soundcloud)."
       },
       "MusicRequest": {
         "type": "object",
@@ -491,7 +491,7 @@
           "url": {
             "type": "string",
             "format": "uri",
-            "description": "Full URL to the music resource. Supported domains: music.apple.com, music.amazon.com, tidal.com, soundcloud.com."
+            "description": "Full URL to the music resource. The platform is detected automatically from the URL domain. Supported: music.apple.com, music.amazon.com, tidal.com, soundcloud.com."
           }
         },
         "required": ["url"]

@@ -23,7 +23,7 @@ Resolve a media link and return every available format plus metadata.
 Request body (JSON):
 
 - url (string, required) - the link to resolve
-- platform (string, optional) - hint: facebook, instagram, tiktok, shopee, apple-music, uc-share, doodstream, pinterest, 9xbuddy, savefrom, x, threads. YouTube is not a hint value; YouTube links are handled by the /v1/youtube endpoints.
+- platform (string, optional) - hint: facebook, instagram, tiktok, shopee, uc-share, doodstream, pinterest, x, threads. YouTube is not a hint value; YouTube links are handled by the /v1/youtube endpoints. Apple Music, Amazon Music, Tidal, and SoundCloud are served by `/v1/music/*`, not this endpoint.
 
 Response data (JSON):
 
@@ -141,4 +141,4 @@ Response data (same shape as info, plus download info):
 
 ## Supported platforms
 
-facebook, instagram, tiktok, shopee, apple-music, uc-share, doodstream, pinterest, 9xbuddy, savefrom, x, threads, youtube (separate /v1/youtube endpoints), amazon / apple-music / tidal / soundcloud (music)
+facebook, instagram, tiktok, shopee, uc-share, doodstream, pinterest, x, threads, youtube (separate /v1/youtube endpoints). Music platforms (apple-music, amazon, tidal, soundcloud) are served by `/v1/music/*`, not `/v1/downloads`.

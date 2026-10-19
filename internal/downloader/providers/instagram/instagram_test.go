@@ -592,11 +592,50 @@ func TestCookieValue(t *testing.T) {
 	}
 }
 
+func TestAudioFromDashManifest(t *testing.T) {
+	if got := audioFromDashManifest(nil); got != "" {
+		t.Errorf("audioFromDashManifest(nil) = %q, want empty", got)
+	}
+	if got := audioFromDashManifest(map[string]interface{}{"video_dash_manifest": ""}); got != "" {
+		t.Errorf("audioFromDashManifest(empty) = %q, want empty", got)
+	}
+	noAudio := `<MPD><Period><AdaptationSet contentType="video"><BaseURL>https://x/v.mp4</BaseURL></AdaptationSet></Period></MPD>`
+	if got := audioFromDashManifest(map[string]interface{}{"video_dash_manifest": noAudio}); got != "" {
+		t.Errorf("audioFromDashManifest(no audio set) = %q, want empty", got)
+	}
+	man := `<MPD><Period><AdaptationSet id="0" contentType="video"><BaseURL>https://x/v.mp4</BaseURL></AdaptationSet><AdaptationSet id="1" contentType="audio" subsegmentStartsWithSAP="1"><Representation bandwidth="68005" codecs="mp4a.40.5"><BaseURL>https://cdn.fb/a.mp4?nc_cat=105&amp;_nc_oc=Ab1</BaseURL></Representation></AdaptationSet></Period></MPD>`
+	got := audioFromDashManifest(map[string]interface{}{"video_dash_manifest": man})
+	want := "https://cdn.fb/a.mp4?nc_cat=105&_nc_oc=Ab1"
+	if got != want {
+		t.Errorf("audioFromDashManifest = %q, want %q", got, want)
+	}
+}
+
+func TestItemsFromOfficialExtractsAudio(t *testing.T) {
+	man := `<MPD><Period><AdaptationSet contentType="video"><BaseURL>https://x/v.mp4</BaseURL></AdaptationSet><AdaptationSet contentType="audio"><Representation><BaseURL>https://cdn.fb/a.mp4?nc_cat=105&amp;_nc_oc=Ab1</BaseURL></Representation></AdaptationSet></Period></MPD>`
+	post := map[string]interface{}{
+		"media_type":           float64(2),
+		"video_versions":       []interface{}{map[string]interface{}{"url": "https://cdn.example/v.mp4"}},
+		"display_url":           "https://cdn.example/t.jpg",
+		"video_dash_manifest":   man,
+	}
+	items := itemsFromOfficial(post)
+	if len(items) != 2 {
+		t.Fatalf("len(items) = %d, want 2 (video + audio)", len(items))
+	}
+	if items[0].kind != "video" || items[0].url != "https://cdn.example/v.mp4" {
+		t.Errorf("items[0] = %+v, want video / v.mp4", items[0])
+	}
+	if items[1].kind != "audio" || items[1].url != "https://cdn.fb/a.mp4?nc_cat=105&_nc_oc=Ab1" {
+		t.Errorf("items[1] = %+v, want audio / a.mp4 (amp-decoded)", items[1])
+	}
+}
+
 func TestResolveNativeVideo(t *testing.T) {
 	htmlBody := `<html><head>
 <meta property="og:title" content="alice on Instagram: Hello IG">
 <meta property="og:image" content="https://cdn.example/thumb.jpg">
-<script>window.__data = {"xdt_api__v1__media__shortcode__web_info":{"items":[{"id":"1","shortcode":"abc12","media_type":2,"video_versions":[{"url":"https:\/\/cdn.example\/v.mp4"}],"display_url":"https:\/\/cdn.example\/t.jpg","owner":{"username":"alice","full_name":"Alice","profile_pic_url":"https:\/\/av.example\/a.jpg","is_verified":true},"caption":{"text":"Hello IG"},"like_count":42,"comment_count":3,"video_duration":12.5}]}};</script>
+<script>window.__data = {"xdt_api__v1__media__shortcode__web_info":{"items":[{"id":"1","code":"abc12","media_type":2,"video_versions":[{"url":"https:\/\/cdn.example\/v.mp4"}],"video_dash_manifest":"<MPD><Period><AdaptationSet contentType=\"video\"><BaseURL>https://x/v.mp4</BaseURL></AdaptationSet><AdaptationSet contentType=\"audio\"><BaseURL>https://cdn.fb/a.mp4?nc_cat=105&amp;_nc_oc=Ab1</BaseURL></AdaptationSet></Period></MPD>","display_url":"https:\/\/cdn.example\/t.jpg","owner":{"username":"alice","full_name":"Alice","profile_pic_url":"https:\/\/av.example\/a.jpg","is_verified":true},"caption":{"text":"Hello IG"},"like_count":42,"comment_count":3,"video_duration":12.5}]}};</script>
 </head></html>`
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -615,11 +654,14 @@ func TestResolveNativeVideo(t *testing.T) {
 	if result.Title != "Hello IG" {
 		t.Errorf("Title = %q, want Hello IG", result.Title)
 	}
-	if result.Type != downloader.MediaVideo {
-		t.Errorf("Type = %q, want video", result.Type)
+	if result.Type != "" {
+		t.Errorf("Type = %q, want empty (mixed video + audio)", result.Type)
 	}
-	if len(result.Formats) != 1 || result.Formats[0].URL != "https://cdn.example/v.mp4" {
-		t.Fatalf("Formats = %+v, want v.mp4", result.Formats)
+	if len(result.Formats) != 2 || result.Formats[0].URL != "https://cdn.example/v.mp4" {
+		t.Fatalf("Formats = %+v, want video v.mp4 + audio", result.Formats)
+	}
+	if result.Formats[1].Type != downloader.MediaAudio {
+		t.Errorf("Formats[1].Type = %q, want audio", result.Formats[1].Type)
 	}
 	if result.DurationMs != 12500 {
 		t.Errorf("DurationMs = %d, want 12500", result.DurationMs)

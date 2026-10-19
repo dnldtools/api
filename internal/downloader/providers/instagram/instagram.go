@@ -809,8 +809,11 @@ func (p *Provider) buildResult(post map[string]interface{}, items []mediaItem) *
 	thumb := ""
 	for _, it := range items {
 		t := downloader.MediaImage
-		if it.kind == "video" {
+		switch it.kind {
+		case "video":
 			t = downloader.MediaVideo
+		case "audio":
+			t = downloader.MediaAudio
 		}
 		formats = append(formats, downloader.Format{Type: t, URL: it.url})
 		if thumb == "" && it.thumb != "" {
@@ -902,6 +905,44 @@ func buildMetadata(post map[string]interface{}) map[string]string {
 	set("location", nestedStr(post, "location", "name"))
 	set("shortcode", str(post["shortcode"]))
 
+	mi := asMap(post["music_info"])
+	if mi == nil {
+		mi = nestedMap(post, "clips_metadata", "music_info")
+	}
+	if mi != nil {
+		mai := asMap(mi["music_asset_info"])
+		if mai == nil {
+			mai = asMap(mi["audio_asset_info"])
+		}
+		if mai != nil {
+			set("music_title", str(mai["title"]))
+			set("music_artist", orStr(str(mai["display_artist"]), str(mai["artist"])))
+			if id := str(mai["audio_cluster_id"]); id != "" {
+				set("music_id", id)
+				set("music_url", "https://www.instagram.com/reels/audio/"+id+"/")
+			}
+			if boolVal(mai["is_explicit"]) {
+				set("music_explicit", "true")
+			}
+			mci := asMap(mi["music_consumption_info"])
+			if mci != nil && boolVal(mci["is_trending_in_clips"]) {
+				set("music_trending", "true")
+			}
+		}
+	}
+	if osi := nestedMap(post, "clips_metadata", "original_sound_info"); osi != nil {
+		if osm := osi; osm != nil {
+			set("original_sound_title", orStr(str(osm["audio_title"]), str(osm["title"])))
+			if a := asMap(osm["creator"]); a != nil {
+				set("original_sound_creator", str(a["username"]))
+			}
+			if id := str(osm["audio_id"]); id != "" {
+				set("original_sound_id", id)
+				set("original_sound_url", "https://www.instagram.com/reels/audio/"+id+"/")
+			}
+		}
+	}
+
 	if len(md) == 0 {
 		return nil
 	}
@@ -978,6 +1019,21 @@ func captionText(post map[string]interface{}) string {
 	return ""
 }
 
+func audioFromDashManifest(node map[string]interface{}) string {
+	if node == nil {
+		return ""
+	}
+	man, ok := node["video_dash_manifest"].(string)
+	if !ok || man == "" {
+		return ""
+	}
+	m := reDashAudioSet.FindStringSubmatch(man)
+	if m == nil {
+		return ""
+	}
+	return html.UnescapeString(m[1])
+}
+
 func itemsFromOfficial(post map[string]interface{}) []mediaItem {
 	if post == nil {
 		return nil
@@ -1008,6 +1064,9 @@ func itemsFromOfficial(post map[string]interface{}) []mediaItem {
 					url:   u,
 					thumb: unescapeURL(orStr(str(node["display_url"]), firstCandidate(asMap(node["image_versions2"])))),
 				})
+				if au := audioFromDashManifest(node); au != "" {
+					items = append(items, mediaItem{kind: "audio", url: au})
+				}
 			}
 			return
 		}
@@ -1389,4 +1448,5 @@ var (
 	reRapidCDNApp  = regexp.MustCompile(`rapidcdn\.app`)
 	reInstasaveA   = regexp.MustCompile(`<a\s+[^>]*href="https://cdn\.instasave\.website/\?token=([A-Za-z0-9_.\-]+)"`)
 	reInstasaveImg = regexp.MustCompile(`<img\s+src="https://cdn\.instasave\.website/\?token=([A-Za-z0-9_.\-]+)"`)
+	reDashAudioSet = regexp.MustCompile(`(?s)<AdaptationSet[^>]*contentType="audio".*?<BaseURL>([^<]+)</BaseURL>`)
 )
