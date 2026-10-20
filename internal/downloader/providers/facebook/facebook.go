@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -272,13 +273,26 @@ func (p *Provider) queryNative(ctx context.Context, inputURL string) (*downloade
 	sd := firstNativeURL(body, reFBNativeSD)
 	hdImage := firstNativeImage(body)
 
+	if hd == "" || sd == "" {
+		phd, psd := extractProgressiveURLs(body)
+		if hd == "" {
+			hd = phd
+		}
+		if sd == "" {
+			sd = psd
+		}
+	}
 	if hd == "" && sd == "" {
 		hd, sd = parseDashVideoURLs(body)
 	}
 
-	formats := make([]downloader.Format, 0, 3)
+	audioURL := extractDashAudioURL(body)
+
+	looksLikePhoto := strings.Contains(clean, "/share/p/") || strings.Contains(clean, "/photo/") || strings.Contains(clean, "/photos/")
+
+	formats := make([]downloader.Format, 0, 4)
 	var mediaType downloader.MediaType
-	if hd != "" || sd != "" || ogVideo != "" || strings.Contains(clean, "/reel/") || strings.Contains(clean, "/watch/") || strings.Contains(clean, "/videos/") || strings.Contains(clean, "/share/v/") {
+	if !looksLikePhoto && (hd != "" || sd != "" || ogVideo != "" || strings.Contains(clean, "/reel/") || strings.Contains(clean, "/watch/") || strings.Contains(clean, "/videos/") || strings.Contains(clean, "/share/v/") || strings.Contains(clean, "/stories/")) {
 		mediaType = downloader.MediaVideo
 		if hd != "" {
 			formats = append(formats, downloader.Format{Type: downloader.MediaVideo, URL: hd, Quality: "hd", Ext: "mp4"})
@@ -289,11 +303,23 @@ func (p *Provider) queryNative(ctx context.Context, inputURL string) (*downloade
 		if len(formats) == 0 && ogVideo != "" {
 			formats = append(formats, downloader.Format{Type: downloader.MediaVideo, URL: ogVideo, Quality: "og", Ext: "mp4"})
 		}
+		if audioURL != "" {
+			formats = append(formats, downloader.Format{Type: downloader.MediaAudio, URL: audioURL, Quality: "audio", Ext: "m4a"})
+		}
 	} else {
 		mediaType = downloader.MediaImage
-		if hdImage != "" {
+		photoURIs := extractFBPhotos(body)
+		for i, u := range photoURIs {
+			quality := "hd"
+			if len(photoURIs) > 1 {
+				quality = "slide_" + strconv.Itoa(i+1)
+			}
+			formats = append(formats, downloader.Format{Type: downloader.MediaImage, URL: u, Quality: quality, Ext: "jpg"})
+		}
+		if len(formats) == 0 && hdImage != "" {
 			formats = append(formats, downloader.Format{Type: downloader.MediaImage, URL: hdImage, Quality: "hd", Ext: "jpg"})
-		} else if ogImage != "" {
+		}
+		if len(formats) == 0 && ogImage != "" {
 			formats = append(formats, downloader.Format{Type: downloader.MediaImage, URL: ogImage, Quality: "og", Ext: "jpg"})
 		}
 	}
@@ -302,7 +328,7 @@ func (p *Provider) queryNative(ctx context.Context, inputURL string) (*downloade
 		return nil, downloader.ErrMediaNotFound
 	}
 
-	looksLikeVideo := strings.Contains(clean, "/reel/") || strings.Contains(clean, "/watch/") || strings.Contains(clean, "/videos/") || strings.Contains(clean, "/share/v/")
+	looksLikeVideo := strings.Contains(clean, "/reel/") || strings.Contains(clean, "/watch/") || strings.Contains(clean, "/videos/") || strings.Contains(clean, "/share/v/") || strings.Contains(clean, "/stories/")
 	if looksLikeVideo && mediaType != downloader.MediaVideo {
 		return nil, downloader.ErrMediaNotFound
 	}
@@ -317,6 +343,17 @@ func (p *Provider) queryNative(ctx context.Context, inputURL string) (*downloade
 	}
 	if desc != "" {
 		res.Metadata["description"] = desc
+	}
+	fbMeta := extractFBMetadata(body)
+	for k, v := range fbMeta {
+		if _, exists := res.Metadata[k]; !exists {
+			res.Metadata[k] = v
+		}
+	}
+	if d := fbMeta["duration_ms"]; d != "" {
+		if ms, err := strconv.ParseInt(d, 10, 64); err == nil && ms > 0 {
+			res.DurationMs = ms
+		}
 	}
 	return res, nil
 }
@@ -472,6 +509,228 @@ func parseDashVideoURLs(body string) (hd, sd string) {
 	return videoURLs[0], videoURLs[1%len(videoURLs)]
 }
 
+func extractProgressiveURLs(body string) (hd, sd string) {
+	re := regexp.MustCompile(`"progressive_url"\s*:\s*"([^"]+)"[^}]*?"quality"\s*:\s*"([^"]+)"`)
+	matches := re.FindAllStringSubmatch(body, -1)
+	seen := make(map[string]bool)
+	for _, m := range matches {
+		u := unescapeFbURL(m[1])
+		if seen[u] {
+			continue
+		}
+		seen[u] = true
+		q := strings.ToUpper(m[2])
+		if q == "HD" && hd == "" {
+			hd = u
+		} else if q == "SD" && sd == "" {
+			sd = u
+		}
+	}
+	return hd, sd
+}
+
+func extractFBPhotos(body string) []string {
+	m := reFBPhotoAttachmentsList.FindStringSubmatch(body)
+	if m != nil {
+		ids := reFBPhotoIDInList.FindAllStringSubmatch(m[1], -1)
+		var uris []string
+		for _, idm := range ids {
+			uri := extractPhotoURIByID(body, idm[1])
+			if uri != "" {
+				uris = append(uris, uri)
+			}
+		}
+		if len(uris) > 0 {
+			return uris
+		}
+	}
+
+	if asaURIs := extractSubAttachmentURIs(body); len(asaURIs) > 0 {
+		return asaURIs
+	}
+
+	if u := extractMainPhotoRendererURI(body); u != "" {
+		return []string{u}
+	}
+
+	if u := firstNativeImage(body); u != "" {
+		return []string{u}
+	}
+	return nil
+}
+
+func extractPhotoURIByID(body, photoID string) string {
+	marker := `"id":"` + photoID + `"`
+	searchFrom := 0
+	for {
+		relIdx := strings.Index(body[searchFrom:], marker)
+		if relIdx < 0 {
+			break
+		}
+		absIdx := searchFrom + relIdx
+		end := absIdx + len(marker) + 3000
+		if end > len(body) {
+			end = len(body)
+		}
+		if m := rePhotoURI.FindStringSubmatch(body[absIdx:end]); m != nil {
+			return unescapeFbURL(m[1])
+		}
+		backStart := absIdx - 500
+		if backStart < 0 {
+			backStart = 0
+		}
+		backMatches := rePhotoURI.FindAllStringSubmatch(body[backStart:absIdx+len(marker)], -1)
+		if len(backMatches) > 0 {
+			return unescapeFbURL(backMatches[len(backMatches)-1][1])
+		}
+		searchFrom = absIdx + len(marker)
+	}
+	return ""
+}
+
+func extractSubAttachmentURIs(body string) []string {
+	asaIdx := strings.Index(body, `"all_subattachments"`)
+	if asaIdx < 0 {
+		return nil
+	}
+	end := asaIdx + 20000
+	if end > len(body) {
+		end = len(body)
+	}
+	nodes := body[asaIdx:end]
+	nodeEnd := strings.Index(nodes, `}]`)
+	if nodeEnd > 0 {
+		nodes = nodes[:nodeEnd]
+	}
+	ids := reFBSubAttachPhotoID.FindAllStringSubmatch(nodes, -1)
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	var uris []string
+	for _, idm := range ids {
+		if seen[idm[1]] {
+			continue
+		}
+		seen[idm[1]] = true
+		uri := extractPhotoURIByID(body, idm[1])
+		if uri != "" {
+			uris = append(uris, uri)
+		}
+	}
+	return uris
+}
+
+func extractMainPhotoRendererURI(body string) string {
+	idx := strings.Index(body, `StoryAttachmentPhotoStyleRenderer`)
+	if idx < 0 {
+		return ""
+	}
+	end := idx + 3000
+	if end > len(body) {
+		end = len(body)
+	}
+	chunk := body[idx:end]
+	if m := reFBPhotoImageURI.FindStringSubmatch(chunk); m != nil {
+		return unescapeFbURL(m[1])
+	}
+	if m := reFBNativeImage[0].FindStringSubmatch(chunk); m != nil {
+		u := unescapeFbURL(m[1])
+		if strings.Contains(u, "fbcdn.net") {
+			return u
+		}
+	}
+	return ""
+}
+
+func extractDashAudioURL(body string) string {
+	idx := strings.Index(body, `"manifest_xml":"`)
+	if idx < 0 {
+		return ""
+	}
+	jsonStart := idx + len(`"manifest_xml":`)
+	decoder := json.NewDecoder(strings.NewReader(body[jsonStart:]))
+	var xmlStr string
+	if decoder.Decode(&xmlStr) != nil {
+		return ""
+	}
+	re := regexp.MustCompile(`(?s)<AdaptationSet[^>]*contentType="audio"[^>]*>.*?<BaseURL>([^<]+)</BaseURL>`)
+	m := re.FindStringSubmatch(xmlStr)
+	if m == nil {
+		return ""
+	}
+	u := html.UnescapeString(m[1])
+	u = strings.ReplaceAll(u, `\/`, "/")
+	if strings.Contains(u, "fbcdn.net") {
+		return u
+	}
+	return ""
+}
+
+func extractFBMetadata(body string) map[string]string {
+	md := make(map[string]string)
+	set := func(k, v string) {
+		v = strings.TrimSpace(v)
+		if v != "" && v != "null" {
+			md[k] = v
+		}
+	}
+
+	if m := reFBVideoID.FindStringSubmatch(body); m != nil {
+		set("video_id", m[1])
+	}
+	if m := reFBOwnerID.FindStringSubmatch(body); m != nil {
+		set("author_id", m[1])
+	}
+	if m := reFBOwnerName.FindStringSubmatch(body); m != nil {
+		set("author", m[1])
+	}
+	if m := reFBCreationTime.FindStringSubmatch(body); m != nil {
+		if ts, err := strconv.ParseInt(m[1], 10, 64); err == nil && ts > 0 {
+			set("created_at", time.Unix(ts, 0).UTC().Format(time.RFC3339))
+		}
+	}
+	if m := reFBPlayableDuration.FindStringSubmatch(body); m != nil {
+		set("duration_ms", m[1])
+	}
+	if m := reFBCommentCount.FindStringSubmatch(body); m != nil {
+		set("comments", m[1])
+	}
+	if m := reFBShareCount.FindStringSubmatch(body); m != nil {
+		set("shares", m[1])
+	}
+	if m := reFBCaptionText.FindStringSubmatch(body); m != nil {
+		caption := unescapeFbJSON(m[1])
+		caption = strings.TrimSpace(caption)
+		if caption != "" && caption != "Every family has some skeletons in their closet." {
+			set("caption", caption)
+		}
+	}
+	if m := reFBThumbURI.FindStringSubmatch(body); m != nil {
+		set("thumbnail", unescapeFbURL(m[1]))
+	}
+
+	if len(md) == 0 {
+		return nil
+	}
+	return md
+}
+
+func unescapeFbJSON(s string) string {
+	s = strings.ReplaceAll(s, `\\`, `\`)
+	s = strings.ReplaceAll(s, `\n`, " ")
+	s = strings.ReplaceAll(s, `\u00a0`, " ")
+	s = strings.ReplaceAll(s, `\u2019`, "'")
+	s = strings.ReplaceAll(s, `\u201c`, `"`)
+	s = strings.ReplaceAll(s, `\u201d`, `"`)
+	s = strings.ReplaceAll(s, `\u2026`, "…")
+	s = strings.ReplaceAll(s, `\uFFFD`, "")
+	s = strings.ReplaceAll(s, `\ufe0f`, "")
+	s = strings.ReplaceAll(s, `\u2764`, "❤")
+	s = strings.ReplaceAll(s, `\"`, `"`)
+	return strings.TrimSpace(s)
+}
+
 func (p *Provider) applyHeaders(r *http.Request) {
 	r.Header.Set("User-Agent", p.userAgent)
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -603,6 +862,22 @@ var (
 		regexp.MustCompile(`"full_sub_photo"\s*:\s*\{\s*"image"\s*:\s*\{\s*"uri"\s*:\s*"([^"]+)"`),
 		regexp.MustCompile(`"photo_image"\s*:\s*\{\s*"uri"\s*:\s*"([^"]+)"`),
 	}
+
+	reFBVideoID          = regexp.MustCompile(`"video_id"\s*:\s*"(\d+)"`)
+	reFBOwnerID          = regexp.MustCompile(`"owner"\s*:\s*\{[^}]*"id"\s*:\s*"(\d+)"`)
+	reFBOwnerName        = regexp.MustCompile(`"owner"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]+)"`)
+	reFBCreationTime     = regexp.MustCompile(`"creation_time"\s*:\s*(\d+)`)
+	reFBPlayableDuration = regexp.MustCompile(`"playable_duration_in_ms"\s*:\s*(\d+)`)
+	reFBCommentCount     = regexp.MustCompile(`"total_comment_count"\s*:\s*(\d+)`)
+	reFBShareCount       = regexp.MustCompile(`"share_count_reduced"\s*:\s*"([^"]+)"`)
+	reFBCaptionText      = regexp.MustCompile(`"creation_story"\s*:[\s\S]*?"text"\s*:\s*"((?:[^"\\]|\\.){5,500})"`)
+	reFBThumbURI         = regexp.MustCompile(`"thumbnail_image"\s*:\s*\{[^}]*"uri"\s*:\s*"([^"]+)"`)
+
+	reFBPhotoAttachmentsList = regexp.MustCompile(`\\"photo_attachments_list\\":\[([^\]]+)\]`)
+	reFBPhotoIDInList        = regexp.MustCompile(`\\"(\d+)\\"`)
+	rePhotoURI               = regexp.MustCompile(`(?s)"uri"\s*:\s*"(https:[^"]+fbcdn[^"]+)"`)
+	reFBSubAttachPhotoID    = regexp.MustCompile(`"__typename"\s*:\s*"Photo"[^}]*?"__isNode"\s*:\s*"Photo"[^}]*?"id"\s*:\s*"(\d+)"`)
+	reFBPhotoImageURI       = regexp.MustCompile(`"photo_image"\s*:\s*\{[^}]*"uri"\s*:\s*"([^"]+)"`)
 )
 
 func parseHTML(text string) (title, thumbnail string, downloads []upstreamFormat) {

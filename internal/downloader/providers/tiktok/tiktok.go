@@ -13,6 +13,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -589,15 +590,15 @@ func (p *Provider) queryOfficial(ctx context.Context, target string) (*downloade
 		}
 	}
 
-	items := make([]mediaItem, 0, len(images)+2)
-	if mp4 := pickPlayURL(video); mp4 != "" {
-		items = append(items, mediaItem{kind: "video", url: mp4, thumb: orStr(str(video["cover"]), str(video["originCover"]))})
+	items := make([]mediaItem, 0, len(images)+4)
+	for _, vi := range collectVideoFormats(video) {
+		items = append(items, vi)
 	}
 	for _, img := range images {
-		items = append(items, mediaItem{kind: "photo", url: img, thumb: img})
+		items = append(items, mediaItem{kind: "photo", url: img, thumb: img, ext: "jpg"})
 	}
 	if mp3 := str(asMap(item["music"])["playUrl"]); mp3 != "" {
-		items = append(items, mediaItem{kind: "audio", url: mp3})
+		items = append(items, mediaItem{kind: "audio", url: mp3, ext: "mp3"})
 	}
 	if len(items) == 0 {
 		return nil, downloader.ErrMediaNotFound
@@ -675,18 +676,17 @@ func (p *Provider) buildNativeResult(item map[string]interface{}, sourceURL stri
 	}
 
 	images := tiktokImages(item)
-	mp4 := pickBestPlayURL(video)
 	mp3 := orStr(str(music["playUrl"]), str(music["play_url"]))
 
-	items := make([]mediaItem, 0, len(images)+2)
-	if mp4 != "" {
-		items = append(items, mediaItem{kind: "video", url: mp4, thumb: orStr(str(video["cover"]), str(video["originCover"]))})
+	items := make([]mediaItem, 0, len(images)+4)
+	for _, vi := range collectVideoFormats(video) {
+		items = append(items, vi)
 	}
 	for _, img := range images {
-		items = append(items, mediaItem{kind: "photo", url: img, thumb: img})
+		items = append(items, mediaItem{kind: "photo", url: img, thumb: img, ext: "jpg"})
 	}
 	if mp3 != "" {
-		items = append(items, mediaItem{kind: "audio", url: mp3})
+		items = append(items, mediaItem{kind: "audio", url: mp3, ext: "mp3"})
 	}
 	if len(items) == 0 {
 		return nil, downloader.ErrMediaNotFound
@@ -772,16 +772,19 @@ func (p *Provider) buildTikwmResult(parsed *tikwmResponse) *downloader.DownloadR
 	title := d.Title
 	cover := orStr(d.Cover, d.OriginCover)
 
-	items := make([]mediaItem, 0, len(d.Images)+2)
-	if videoURL := orStr(d.HDPlay, d.Play); videoURL != "" {
-		items = append(items, mediaItem{kind: "video", url: p.tikwmAbsolute(videoURL), thumb: cover})
+	items := make([]mediaItem, 0, len(d.Images)+3)
+	if d.HDPlay != "" {
+		items = append(items, mediaItem{kind: "video", url: p.tikwmAbsolute(d.HDPlay), thumb: cover, quality: "hd", ext: "mp4"})
+	}
+	if d.Play != "" && d.Play != d.HDPlay {
+		items = append(items, mediaItem{kind: "video", url: p.tikwmAbsolute(d.Play), thumb: cover, quality: "no-watermark", ext: "mp4"})
 	}
 	for _, img := range d.Images {
 		u := p.tikwmAbsolute(img)
-		items = append(items, mediaItem{kind: "photo", url: u, thumb: u})
+		items = append(items, mediaItem{kind: "photo", url: u, thumb: u, ext: "jpg"})
 	}
 	if musicURL := orStr(d.MusicInfo.Play, d.Music); musicURL != "" {
-		items = append(items, mediaItem{kind: "audio", url: p.tikwmAbsolute(musicURL)})
+		items = append(items, mediaItem{kind: "audio", url: p.tikwmAbsolute(musicURL), ext: "mp3"})
 	}
 	if len(items) == 0 {
 		return nil
@@ -951,7 +954,7 @@ func (p *Provider) querySnaptik(ctx context.Context, target string) (*downloader
 		if kind == "photo" {
 			thumb = direct
 		}
-		items = append(items, mediaItem{kind: kind, url: direct, thumb: thumb})
+		items = append(items, mediaItem{kind: kind, url: direct, thumb: thumb, quality: snaptikQuality(label, kind), ext: defaultExt(kind)})
 	}
 
 	if len(items) == 0 {
@@ -966,7 +969,11 @@ func (p *Provider) buildResult(title, cover, author string, items []mediaItem) *
 	formats := make([]downloader.Format, 0, len(items))
 	thumb := cover
 	for _, it := range items {
-		formats = append(formats, downloader.Format{Type: mediaType(it.kind), URL: it.url})
+		f := downloader.Format{Type: mediaType(it.kind), URL: it.url, Quality: it.quality, Ext: it.ext}
+		if f.Ext == "" {
+			f.Ext = defaultExt(it.kind)
+		}
+		formats = append(formats, f)
 		if thumb == "" && it.thumb != "" {
 			thumb = it.thumb
 		}
@@ -981,24 +988,19 @@ func (p *Provider) buildResult(title, cover, author string, items []mediaItem) *
 		result.Metadata = map[string]string{"author": author}
 	}
 
-	primary := formats[0].Type
-	same := true
-	for _, f := range formats[1:] {
-		if f.Type != primary {
-			same = false
-			break
-		}
+	if len(formats) == 0 {
+		return result
 	}
-	if same {
-		result.Type = primary
-	}
+	result.Type = formats[0].Type
 	return result
 }
 
 type mediaItem struct {
-	kind  string
-	url   string
-	thumb string
+	kind    string
+	url     string
+	thumb   string
+	quality string
+	ext     string
 }
 
 func mediaType(kind string) downloader.MediaType {
@@ -1009,6 +1011,17 @@ func mediaType(kind string) downloader.MediaType {
 		return downloader.MediaAudio
 	default:
 		return downloader.MediaImage
+	}
+}
+
+func defaultExt(kind string) string {
+	switch kind {
+	case "video":
+		return "mp4"
+	case "audio":
+		return "mp3"
+	default:
+		return "jpg"
 	}
 }
 
@@ -1278,6 +1291,61 @@ func pickBestPlayURL(video map[string]interface{}) string {
 	return ""
 }
 
+func collectVideoFormats(video map[string]interface{}) []mediaItem {
+	if video == nil {
+		return nil
+	}
+	thumb := orStr(str(video["cover"]), str(video["originCover"]))
+	seen := map[string]struct{}{}
+	var out []mediaItem
+
+	type entry struct {
+		bitrate int64
+		gear    string
+		qtype   int64
+		url     string
+	}
+	var entries []entry
+	for _, b := range sliceOf(video["bitrateInfo"]) {
+		m := asMap(b)
+		list := nestedSlice(m, "PlayAddr", "UrlList")
+		if len(list) == 0 {
+			continue
+		}
+		u := str(list[0])
+		if u == "" {
+			continue
+		}
+		entries = append(entries, entry{
+			bitrate: bitrateOf(m),
+			gear:    str(m["GearType"]),
+			qtype:   int64(num(m["QualityType"])),
+			url:     u,
+		})
+	}
+	sort.SliceStable(entries, func(i, j int) bool { return entries[i].bitrate > entries[j].bitrate })
+	for _, e := range entries {
+		if _, ok := seen[e.url]; ok {
+			continue
+		}
+		seen[e.url] = struct{}{}
+		out = append(out, mediaItem{kind: "video", url: e.url, thumb: thumb, quality: videoQualityLabel(e.bitrate, e.gear, e.qtype, false), ext: "mp4"})
+	}
+	if u := str(video["downloadAddr"]); u != "" {
+		if _, ok := seen[u]; !ok {
+			seen[u] = struct{}{}
+			out = append(out, mediaItem{kind: "video", url: u, thumb: thumb, quality: "watermark", ext: "mp4"})
+		}
+	}
+	if u := str(video["playAddr"]); u != "" {
+		if _, ok := seen[u]; !ok {
+			seen[u] = struct{}{}
+			out = append(out, mediaItem{kind: "video", url: u, thumb: thumb, quality: "no-watermark", ext: "mp4"})
+		}
+	}
+	return out
+}
+
 func bitrateOf(b interface{}) int64 {
 	m := asMap(b)
 	if n, ok := m["Bitrate"].(float64); ok {
@@ -1287,6 +1355,61 @@ func bitrateOf(b interface{}) int64 {
 		return int64(n)
 	}
 	return 0
+}
+
+func videoQualityLabel(bitrate int64, gear string, qtype int64, watermark bool) string {
+	if watermark {
+		return "watermark"
+	}
+	if res := firstMatch(reGearRes, gear); res != "" {
+		return res
+	}
+	switch qtype {
+	case 30, 31:
+		return "hd"
+	case 20, 21:
+		return "sd"
+	case 10, 11:
+		return "low"
+	}
+	if bitrate >= 2_000_000 {
+		return "hd"
+	}
+	if bitrate >= 800_000 {
+		return "sd"
+	}
+	if bitrate > 0 {
+		return "low"
+	}
+	return "no-watermark"
+}
+
+func snaptikQuality(label, kind string) string {
+	if kind == "audio" {
+		return "mp3"
+	}
+	if strings.Contains(label, "4k") || strings.Contains(label, "2160") {
+		return "4k"
+	}
+	if strings.Contains(label, "1080") {
+		return "1080p"
+	}
+	if strings.Contains(label, "720") {
+		return "720p"
+	}
+	if strings.Contains(label, "hd") {
+		return "hd"
+	}
+	if strings.Contains(label, "sd") {
+		return "sd"
+	}
+	if strings.Contains(label, "watermark") {
+		return "watermark"
+	}
+	if kind == "photo" {
+		return "slide"
+	}
+	return "no-watermark"
 }
 
 func extractJSONBlocks(htmlText string) []map[string]interface{} {
@@ -1450,6 +1573,7 @@ var (
 	reAudioLabel   = regexp.MustCompile(`mp3|audio`)
 	rePhotoLabel   = regexp.MustCompile(`photo|image|pic|slide|jpg|jpeg|png`)
 	reAtHandle     = regexp.MustCompile(`@([A-Za-z0-9_.]+)`)
+	reGearRes      = regexp.MustCompile(`(?i)(4k|2160p|1440p|1080p|720p|576p|540p|480p|360p|270p)`)
 )
 
 func firstMatch(re *regexp.Regexp, s string) string {

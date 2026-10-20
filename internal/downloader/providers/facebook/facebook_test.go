@@ -5,6 +5,8 @@ import (
 	stderrors "errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -438,5 +440,55 @@ func TestResolveNativeImage(t *testing.T) {
 	}
 	if result.Thumbnail != "https://scontent.example/thumb.jpg" {
 		t.Errorf("Thumbnail = %q, want og image", result.Thumbnail)
+	}
+}
+
+func TestResolveNativePhotoCarousel(t *testing.T) {
+	htmlBody := `<html><head>
+<meta property="og:title" content="Photo Album">
+<meta property="og:image" content="https://scontent.example/thumb.jpg">
+<script>
+{"attachments":[{"media":{"__typename":"Photo","id":"111","photo_image":{"uri":"https:\/\/scontent.fbcdn.net\/v\/111.jpg"}}}]}
+{\"story_attachment_style\":\"album\",\"photo_attachments_list\":[\"111\",\"222\",\"333\"]}
+{"id":"111","__isMedia":"Photo","image":{"uri":"https:\/\/scontent.fbcdn.net\/v\/111.jpg"}}
+{"id":"222","__isMedia":"Photo","image":{"uri":"https:\/\/scontent.fbcdn.net\/v\/222.jpg"}}
+{"id":"333","__isMedia":"Photo","image":{"uri":"https:\/\/scontent.fbcdn.net\/v\/333.jpg"}}
+</script>
+</head></html>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(htmlBody))
+	}))
+	defer srv.Close()
+
+	p := NewWithConfig(Config{NativeEnabled: true, NativeBaseURL: srv.URL})
+
+	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: "https://web.facebook.com/share/p/19SiQpBubt/"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if result.Type != downloader.MediaImage {
+		t.Errorf("Type = %q, want image", result.Type)
+	}
+	if len(result.Formats) != 3 {
+		t.Fatalf("len(Formats) = %d, want 3", len(result.Formats))
+	}
+	for i, f := range result.Formats {
+		want := "slide_" + strconv.Itoa(i+1)
+		if f.Quality != want {
+		t.Errorf("Format[%d].Quality = %q, want %q", i, f.Quality, want)
+		}
+		if f.Type != downloader.MediaImage {
+			t.Errorf("Format[%d].Type = %q, want image", i, f.Type)
+		}
+		if f.Ext != "jpg" {
+			t.Errorf("Format[%d].Ext = %q, want jpg", i, f.Ext)
+		}
+	}
+	if !strings.Contains(result.Formats[0].URL, "111.jpg") {
+		t.Errorf("Format[0].URL = %q, want 111.jpg", result.Formats[0].URL)
+	}
+	if !strings.Contains(result.Formats[2].URL, "333.jpg") {
+		t.Errorf("Format[2].URL = %q, want 333.jpg", result.Formats[2].URL)
 	}
 }

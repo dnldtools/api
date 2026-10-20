@@ -722,6 +722,184 @@ func TestParseShortDramaURL(t *testing.T) {
 	}
 }
 
+func TestResolveNativeSSRMultipleVideoFormats(t *testing.T) {
+	item := map[string]interface{}{
+		"id":     "1234567890",
+		"desc":   "Multi quality",
+		"author": map[string]interface{}{"uniqueId": "alice"},
+		"video": map[string]interface{}{
+			"cover": "https://cdn.example.com/c.jpg",
+			"bitrateInfo": []interface{}{
+				map[string]interface{}{"Bitrate": float64(500000), "GearType": "normal_540p", "QualityType": float64(20), "PlayAddr": map[string]interface{}{"UrlList": []interface{}{"https://cdn.example.com/sd.mp4"}}},
+				map[string]interface{}{"Bitrate": float64(3000000), "GearType": "higher_1080p", "QualityType": float64(30), "PlayAddr": map[string]interface{}{"UrlList": []interface{}{"https://cdn.example.com/hd.mp4"}}},
+			},
+			"downloadAddr": "https://cdn.example.com/wm.mp4",
+			"playAddr":     "https://cdn.example.com/play.mp4",
+		},
+		"music": map[string]interface{}{"playUrl": "https://cdn.example.com/m.mp3"},
+	}
+
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(rehydrationPage(item)))
+	}))
+	defer relay.Close()
+
+	p := NewWithConfig(Config{NativeEnabled: true, OfficialBaseURL: relay.URL})
+	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testVideoURL})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	want := []struct {
+		typ     downloader.MediaType
+		url     string
+		quality string
+		ext     string
+	}{
+		{downloader.MediaVideo, "https://cdn.example.com/hd.mp4", "1080p", "mp4"},
+		{downloader.MediaVideo, "https://cdn.example.com/sd.mp4", "540p", "mp4"},
+		{downloader.MediaVideo, "https://cdn.example.com/wm.mp4", "watermark", "mp4"},
+		{downloader.MediaVideo, "https://cdn.example.com/play.mp4", "no-watermark", "mp4"},
+		{downloader.MediaAudio, "https://cdn.example.com/m.mp3", "", "mp3"},
+	}
+	if len(result.Formats) != len(want) {
+		t.Fatalf("len(Formats) = %d, want %d (%+v)", len(result.Formats), len(want), result.Formats)
+	}
+	for i, w := range want {
+		f := result.Formats[i]
+		if f.Type != w.typ || f.URL != w.url || f.Quality != w.quality || f.Ext != w.ext {
+			t.Errorf("Formats[%d] = {Type:%q URL:%q Quality:%q Ext:%q}, want {%q %q %q %q}", i, f.Type, f.URL, f.Quality, f.Ext, w.typ, w.url, w.quality, w.ext)
+		}
+	}
+	if result.Type != downloader.MediaVideo {
+		t.Errorf("Type = %q, want video", result.Type)
+	}
+}
+
+func TestResolveNativeSSRDedupesPlayAddr(t *testing.T) {
+	item := map[string]interface{}{
+		"id":     "1234567890",
+		"desc":   "Dedup",
+		"author": map[string]interface{}{"uniqueId": "alice"},
+		"video": map[string]interface{}{
+			"cover": "https://cdn.example.com/c.jpg",
+			"bitrateInfo": []interface{}{
+				map[string]interface{}{"Bitrate": float64(3000000), "GearType": "higher_1080p", "PlayAddr": map[string]interface{}{"UrlList": []interface{}{"https://cdn.example.com/hd.mp4"}}},
+			},
+			"playAddr": "https://cdn.example.com/hd.mp4",
+		},
+	}
+
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(rehydrationPage(item)))
+	}))
+	defer relay.Close()
+
+	p := NewWithConfig(Config{NativeEnabled: true, OfficialBaseURL: relay.URL})
+	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testVideoURL})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if len(result.Formats) != 1 {
+		t.Fatalf("len(Formats) = %d, want 1 (playAddr dup of bitrateInfo must be dropped): %+v", len(result.Formats), result.Formats)
+	}
+}
+
+func TestResolveNativeSSRSlideshowWithMusic(t *testing.T) {
+	item := map[string]interface{}{
+		"id":     "1234567890",
+		"desc":   "Slide deck",
+		"author": map[string]interface{}{"uniqueId": "alice"},
+		"imagePost": map[string]interface{}{
+			"images": []interface{}{
+				map[string]interface{}{"imageURL": map[string]interface{}{"urlList": []interface{}{"https://cdn.example.com/1.jpg"}}},
+				map[string]interface{}{"imageURL": map[string]interface{}{"urlList": []interface{}{"https://cdn.example.com/2.jpg"}}},
+				map[string]interface{}{"imageURL": map[string]interface{}{"urlList": []interface{}{"https://cdn.example.com/3.jpg"}}},
+			},
+		},
+		"music": map[string]interface{}{"playUrl": "https://cdn.example.com/m.mp3"},
+	}
+
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(rehydrationPage(item)))
+	}))
+	defer relay.Close()
+
+	p := NewWithConfig(Config{NativeEnabled: true, OfficialBaseURL: relay.URL})
+	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testVideoURL})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	want := []struct {
+		typ downloader.MediaType
+		url string
+		ext string
+	}{
+		{downloader.MediaImage, "https://cdn.example.com/1.jpg", "jpg"},
+		{downloader.MediaImage, "https://cdn.example.com/2.jpg", "jpg"},
+		{downloader.MediaImage, "https://cdn.example.com/3.jpg", "jpg"},
+		{downloader.MediaAudio, "https://cdn.example.com/m.mp3", "mp3"},
+	}
+	if len(result.Formats) != len(want) {
+		t.Fatalf("len(Formats) = %d, want %d (%+v)", len(result.Formats), len(want), result.Formats)
+	}
+	for i, w := range want {
+		f := result.Formats[i]
+		if f.Type != w.typ || f.URL != w.url || f.Ext != w.ext {
+			t.Errorf("Formats[%d] = {Type:%q URL:%q Ext:%q}, want {%q %q %q}", i, f.Type, f.URL, f.Ext, w.typ, w.url, w.ext)
+		}
+	}
+	if result.Type != downloader.MediaImage {
+		t.Errorf("Type = %q, want image", result.Type)
+	}
+	if result.Thumbnail != "https://cdn.example.com/1.jpg" {
+		t.Errorf("Thumbnail = %q, want first slide", result.Thumbnail)
+	}
+}
+
+func TestResolveTikwmMultipleVideoFormats(t *testing.T) {
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("no rehydration here ", 40)))
+	}))
+	defer relay.Close()
+
+	tikwm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload := `{"code":0,"msg":"success","data":{` +
+			`"id":"1234567890","title":"HD+SD",` +
+			`"author":{"unique_id":"alice"},` +
+			`"music_info":{"play":"https://tikwm.example/m.mp3"},` +
+			`"duration":15,"cover":"https://cv.example/c.jpg",` +
+			`"hdplay":"https://cdn.example/hd.mp4","play":"https://cdn.example/sd.mp4","images":[]}}`
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer tikwm.Close()
+
+	p := NewWithConfig(Config{OfficialBaseURL: relay.URL, TikwmEnabled: true, TikwmBaseURL: tikwm.URL})
+	result, err := p.Resolve(context.Background(), downloader.DownloadRequest{URL: testVideoURL})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	want := []struct {
+		typ     downloader.MediaType
+		url     string
+		quality string
+	}{
+		{downloader.MediaVideo, "https://cdn.example/hd.mp4", "hd"},
+		{downloader.MediaVideo, "https://cdn.example/sd.mp4", "no-watermark"},
+		{downloader.MediaAudio, "https://tikwm.example/m.mp3", ""},
+	}
+	if len(result.Formats) != len(want) {
+		t.Fatalf("len(Formats) = %d, want %d (%+v)", len(result.Formats), len(want), result.Formats)
+	}
+	for i, w := range want {
+		f := result.Formats[i]
+		if f.Type != w.typ || f.URL != w.url || f.Quality != w.quality {
+			t.Errorf("Formats[%d] = {Type:%q URL:%q Quality:%q}, want {%q %q %q}", i, f.Type, f.URL, f.Quality, w.typ, w.url, w.quality)
+		}
+	}
+}
+
 func TestResolveShortDramaEpisode(t *testing.T) {
 	var gotDramaID, gotCursor string
 	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

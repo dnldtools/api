@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	stderrors "errors"
+	nethtml "html"
 	"io"
 	"net"
 	"net/http"
@@ -117,8 +118,8 @@ func (p *Provider) Resolve(ctx context.Context, req downloader.DownloadRequest) 
 	}
 
 	strategies := []func(context.Context, string) (*downloader.DownloadResult, error){
-		p.fromPinssaver,
 		p.fromOfficial,
+		p.fromPinssaver,
 		p.fromPintsave,
 	}
 	var lastErr error
@@ -214,10 +215,10 @@ func (p *Provider) fromPinssaver(ctx context.Context, pinURL string) (*downloade
 	}
 	formats := formatsFromSrc(data["src"])
 	if v, _ := data["video"].(string); v != "" {
-		formats = prepend(formats, downloader.Format{Type: downloader.MediaVideo, URL: v, Quality: "video", Ext: "mp4"})
+		formats = prepend(formats, videoFmt(v, "video"))
 	}
 	if v, _ := data["video_url"].(string); v != "" {
-		formats = prepend(formats, downloader.Format{Type: downloader.MediaVideo, URL: v, Quality: "video", Ext: "mp4"})
+		formats = prepend(formats, videoFmt(v, "video"))
 	}
 	if imgs, ok := data["images"].([]any); ok {
 		for _, img := range imgs {
@@ -303,7 +304,7 @@ func (p *Provider) fromPintsave(ctx context.Context, pinURL string) (*downloader
 			}
 			typ, _ := m["type"].(string)
 			if strings.Contains(strings.ToLower(typ), "video") || looksVideo(u) {
-				formats = append(formats, downloader.Format{Type: downloader.MediaVideo, URL: u, Quality: "video", Ext: "mp4"})
+				formats = append(formats, videoFmt(u, "video"))
 			} else {
 				formats = append(formats, imageFmt(u, "image"))
 			}
@@ -345,42 +346,82 @@ func (p *Provider) fromOfficial(ctx context.Context, pinURL string) (*downloader
 		return nil, err
 	}
 	html := string(body)
-	formats := make([]downloader.Format, 0)
 	title := metaContent(html, "og:title")
+	poster := metaContent(html, "og:image")
+	if !strings.Contains(poster, "pinimg") {
+		poster = ""
+	}
+	var videoFormats, imageFormats []downloader.Format
 	if v := metaContent(html, "og:video"); v != "" {
-		formats = append(formats, downloader.Format{Type: downloader.MediaVideo, URL: v, Quality: "og", Ext: "mp4"})
+		videoFormats = append(videoFormats, videoFmt(v, "og"))
 	}
-	if img := metaContent(html, "og:image"); img != "" && strings.Contains(img, "pinimg") {
-		formats = append(formats, imageFmt(upgradePinimg(img), "og"))
+	for _, u := range rePinMP4.FindAllString(html, -1) {
+		videoFormats = append(videoFormats, videoFmt(u, pinVideoQuality(u)))
 	}
-	for _, id := range []string{"__PWS_DATA__", "__PWS_INITIAL_PROPS__"} {
-		blob := scriptJSON(html, id)
-		if blob == nil {
+	imgSig := stringField(html, rePinImageSig)
+	for _, u := range rePinOriginals.FindAllString(html, -1) {
+		if imgSig != "" && !strings.Contains(u, imgSig) {
 			continue
 		}
-		for _, u := range collectStrings(blob) {
-			if !isPinMedia(u) {
+		imageFormats = append(imageFormats, imageFmt(u, "original"))
+	}
+	videoFormats = uniqueFormats(videoFormats)
+	imageFormats = uniqueFormats(imageFormats)
+	if len(videoFormats) == 0 && len(imageFormats) == 0 {
+		for _, id := range []string{"__PWS_DATA__", "__PWS_INITIAL_PROPS__"} {
+			blob := scriptJSON(html, id)
+			if blob == nil {
 				continue
 			}
-			if looksVideo(u) {
-				formats = append(formats, downloader.Format{Type: downloader.MediaVideo, URL: u, Quality: "pws", Ext: "mp4"})
-			} else {
-				formats = append(formats, imageFmt(upgradePinimg(u), "pws"))
+			for _, u := range collectStrings(blob) {
+				if !isPinMedia(u) {
+					continue
+				}
+				if looksVideo(u) {
+					videoFormats = append(videoFormats, videoFmt(u, "pws"))
+				} else if strings.Contains(u, "originals/") && (imgSig == "" || strings.Contains(u, imgSig)) {
+					imageFormats = append(imageFormats, imageFmt(u, "pws"))
+				}
 			}
 		}
+		videoFormats = uniqueFormats(videoFormats)
+		imageFormats = uniqueFormats(imageFormats)
 	}
-	formats = uniqueFormats(formats)
+	var formats []downloader.Format
+	if len(videoFormats) > 0 {
+		formats = videoFormats
+	} else {
+		formats = imageFormats
+	}
 	if len(formats) == 0 {
 		return nil, downloader.ErrMediaNotFound
+	}
+	if title == "" {
+		title = stringField(html, rePinGridTitle)
+	}
+	title = nethtml.UnescapeString(title)
+	meta := map[string]string{"source": "official"}
+	if u := stringField(html, rePinGridDesc); u != "" {
+		meta["caption"] = unescapePinJSON(u)
+	} else if d := metaContent(html, "og:description"); d != "" {
+		meta["caption"] = nethtml.UnescapeString(d)
+	} else if u := stringField(html, rePinDescription); u != "" {
+		meta["caption"] = unescapePinJSON(u)
+	}
+	if u := stringField(html, rePinUsername); u != "" {
+		meta["username"] = u
+	}
+	if u := stringField(html, rePinFullname); u != "" {
+		meta["author"] = u
 	}
 	return &downloader.DownloadResult{
 		Platform:  downloader.PlatformPinterest,
 		URL:       pinURL,
 		Title:     title,
 		Type:      sameType(formats),
-		Thumbnail: firstImage(formats),
+		Thumbnail: poster,
 		Formats:   formats,
-		Metadata:  map[string]string{"source": "official"},
+		Metadata:  meta,
 	}, nil
 }
 
@@ -435,7 +476,7 @@ func formatsFromSrc(src any) []downloader.Format {
 		}
 		seen[u] = struct{}{}
 		if looksVideo(u) || strings.Contains(strings.ToLower(key), "video") {
-			out = append(out, downloader.Format{Type: downloader.MediaVideo, URL: u, Quality: key, Ext: "mp4"})
+			out = append(out, videoFmt(u, key))
 			return
 		}
 		out = append(out, imageFmt(u, key))
@@ -462,7 +503,7 @@ func collectPinURLs(v any) []downloader.Format {
 		case string:
 			if isPinMedia(t) {
 				if looksVideo(t) {
-					out = append(out, downloader.Format{Type: downloader.MediaVideo, URL: t, Quality: "pintsave", Ext: "mp4"})
+					out = append(out, videoFmt(t, "pintsave"))
 				} else {
 					out = append(out, imageFmt(t, "pintsave"))
 				}
@@ -542,14 +583,53 @@ func imageFmt(u, q string) downloader.Format {
 	return downloader.Format{Type: downloader.MediaImage, URL: u, Quality: q, Ext: ext}
 }
 
+func videoExt(u string) string {
+	clean := strings.Split(u, "?")[0]
+	ext := strings.ToLower(strings.TrimPrefix(path.Ext(clean), "."))
+	if ext == "m3u8" || ext == "mp4" {
+		return ext
+	}
+	if strings.Contains(strings.ToLower(u), "m3u8") {
+		return "m3u8"
+	}
+	return "mp4"
+}
+
+func videoFmt(u, q string) downloader.Format {
+	return downloader.Format{Type: downloader.MediaVideo, URL: u, Quality: q, Ext: videoExt(u)}
+}
+
 func looksVideo(u string) bool {
 	low := strings.ToLower(u)
-	return strings.Contains(low, ".mp4") || strings.Contains(low, "v.pinimg.com")
+	return strings.Contains(low, ".mp4") || rePinVideoHost.MatchString(low)
 }
 
 func isPinMedia(u string) bool {
 	low := strings.ToLower(u)
 	return strings.HasPrefix(low, "http") && (strings.Contains(low, "pinimg.com") || strings.Contains(low, ".mp4"))
+}
+
+func pinVideoQuality(u string) string {
+	if m := rePinVideoWH.FindStringSubmatch(u); len(m) == 2 {
+		return m[1] + "p"
+	}
+	return "video"
+}
+
+func stringField(html string, re *regexp.Regexp) string {
+	m := re.FindStringSubmatch(html)
+	if len(m) == 2 {
+		return m[1]
+	}
+	return ""
+}
+
+func unescapePinJSON(s string) string {
+	s = strings.ReplaceAll(s, "\\u0026", "&")
+	s = strings.ReplaceAll(s, "\\\"", "\"")
+	s = strings.ReplaceAll(s, "\\n", " ")
+	s = strings.ReplaceAll(s, "\\/", "/")
+	return nethtml.UnescapeString(s)
 }
 
 func uniqueFormats(in []downloader.Format) []downloader.Format {
@@ -632,3 +712,16 @@ func classifyHTTPStatus(status int) error {
 	}
 	return downloader.ErrProviderInvalidResponse
 }
+
+var (
+	rePinVideoHost   = regexp.MustCompile(`v\d*\.pinimg\.com`)
+	rePinMP4         = regexp.MustCompile(`https://v\d+\.pinimg\.com/videos/[a-zA-Z0-9/_.-]+\.mp4`)
+	rePinOriginals   = regexp.MustCompile(`https://i\.pinimg\.com/originals/[a-zA-Z0-9/]+\.(?:jpg|jpeg|png|gif|webp)`)
+	rePinVideoWH     = regexp.MustCompile(`_(\d+)w\.mp4`)
+	rePinGridTitle   = regexp.MustCompile(`"gridTitle"\s*:\s*"([^"]{1,300})"`)
+	rePinGridDesc    = regexp.MustCompile(`"gridDescription"\s*:\s*"([^"\\](?:[^"\\]|\\.){4,500})"`)
+	rePinDescription = regexp.MustCompile(`"description"\s*:\s*"([^"\\](?:[^"\\]|\\.){20,500})"`)
+	rePinUsername    = regexp.MustCompile(`"pinner"\s*:\s*\{[\s\S]*?"username"\s*:\s*"([^"]+)"`)
+	rePinFullname    = regexp.MustCompile(`"pinner"\s*:\s*\{[\s\S]*?"fullName"\s*:\s*"([^"]+)"`)
+	rePinImageSig    = regexp.MustCompile(`"image_?[Ss]ignature"\s*:\s*"([a-f0-9]{20,})"`)
+)
