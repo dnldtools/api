@@ -1324,12 +1324,18 @@ func collectVideoFormats(video map[string]interface{}) []mediaItem {
 		})
 	}
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].bitrate > entries[j].bitrate })
+	seenQuality := map[string]struct{}{}
 	for _, e := range entries {
 		if _, ok := seen[e.url]; ok {
 			continue
 		}
+		label := videoQualityLabel(e.bitrate, e.gear, e.qtype, false)
+		if _, ok := seenQuality[label]; ok {
+			continue
+		}
 		seen[e.url] = struct{}{}
-		out = append(out, mediaItem{kind: "video", url: e.url, thumb: thumb, quality: videoQualityLabel(e.bitrate, e.gear, e.qtype, false), ext: "mp4"})
+		seenQuality[label] = struct{}{}
+		out = append(out, mediaItem{kind: "video", url: e.url, thumb: thumb, quality: label, ext: "mp4"})
 	}
 	if u := str(video["downloadAddr"]); u != "" {
 		if _, ok := seen[u]; !ok {
